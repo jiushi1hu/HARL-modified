@@ -1,0 +1,135 @@
+#这个yaml文件，作用是：
+#          告诉程序：有哪些水库、数据在哪里、模拟哪几年、动作怎么离散、P2 P3 P4怎么定义、长期约束是什么、lambda怎么更新
+state_type: "EP" #这里规定HARL使用的中心化状态类型
+#在这个项目中，意味着：
+#                 Actor：每个水库只看自己的决策观测
+#                 Critic：看整个五库系统的集中状态
+#
+reservoir_order: #这里定义五库的物理串联顺序
+  - WDD
+  - BHT
+  - XLD
+  - XJB
+  - THR
+
+data: #这里定义环境所需要的数据文件
+  root: "data/cascade_reservoir" #表示所有水库数据的总目录，后面的文件路径一般都是相对于整个目录的
+
+  reservoir_physics: "static/reservoir_physics.csv" #这个文件保存每座水库的基本物理参数
+  level_storage_anchors: "static/level_storage_anchors.csv" #这是水位-库容关系
+
+  daily_inflow: "timeseries/daily_inflow.csv" #这个文件提供每天的水文输入
+
+  initial_state: "initialization/initial_state.csv" #这个文件告诉环境，开始时，五库各自是什么状态
+
+  water_level_limits: "constraints/water_level_limits.csv" #这个文件提供水位控制边界
+
+
+simulation: #这里开始定义模拟时间
+  start_date: "2023-01-01"
+  end_date: "2025-12-31"
+  timestep_seconds: 86400 #时间步长度
+
+
+hydropower: #定义水电计算相关参数
+  efficiency: 0.94 #表示综合效率
+
+
+action: #定义Actor的动作
+  num_actions: 201 #动作个数
+
+
+operation_stage: #按照一年中的月份，把水库运行划分为四个阶段
+  dry_supply: #枯水/供水阶段
+    - "01-01"
+    - "05-31"
+
+  flood_control: #汛期
+    - "06-01"
+    - "09-30"
+
+  storage: #蓄水期
+    - "10-01"
+    - "11-30"
+
+  high_level: #高水位运行阶段
+    - "12-01"
+    - "12-31"
+
+
+level_control: #前面回答的是“今天属于什么阶段？”这里回答的是：“这个阶段应该使用哪一列水位限制？”
+  dry_supply: "normal_upper_level_m" #这里不是说在枯水期水库要维持在正常蓄水位，只是说正常蓄水位作为这个阶段的上限
+  flood_control: "flood_limit_level_m" #这段时间的主要任务包括防洪，所以不能让水库一直蓄到正常蓄水位附近
+  storage: "normal_upper_level_m" #这里只规定了“最多可以到正常水位”，但是没有规定：必须马上达到正常蓄水位
+  high_level: "normal_upper_level_m"
+#这段的意思是：在不同运行阶段，P2的“当前允许上限”从从water_level_limits.csv的哪一列读取
+
+safety: #这一部分就是第一层layer 1
+
+  p3: #开始定义P3，也就是相邻时段变化约束
+    release_change_ratio: 0.5 #下泄变化比例
+    release_change_floor_m3s: 5000.0 #最低变化额度
+    max_relaxation_factor: 2.0 #表示P3在S3中最多可以放宽到正常限制的2倍
+
+    level_change_limit_m: #这部分定义正常情况下每天变化多少
+      WDD: 0.30
+      BHT: 0.50
+      XLD: 0.90
+      XJB: 0.20
+      THR: 1.40
+
+  p4: #定义最低优先级的运行约束
+    normal_release_inflow_ratio: 1.0 #正常下泄入流比，为1的话也就是：当前下泄不能低于当前入流
+    min_release_inflow_ratio: 0.75 #P4最大松弛边界，也就是下泄最低运行为入流的75%
+
+  relaxation:
+    tolerance: 0.001 #表达的是：寻找“最小必要松弛量”时，搜索到多精细就停止 采用二分法
+    max_iterations: 16 
+
+
+long_term_constraints: #Layer 2
+
+  - reservoir_id: WDD
+    type: "eco_release" #表示约束类型是生态下泄，检查乌东德下泄是否满足生态要求
+    requirement: 1200.0 #目标生态下泄要求是1200
+    beta: 1.0 #这是长期约束违反量函数中的尺度参数之一
+    normalizer: 1.0 #这是违反cost的归一化参数，1意味着没有通过这个参数进行额外数量级缩放
+    tolerance: 0.0 #意味着没有额外的“允许少一点也算满足”的宽容区间
+    budget: 0.02 #它是长期约束cost的允许预算，也就是这条长期约束允许的cost水平是0.02
+
+  - reservoir_id: BHT
+    type: "eco_release"
+    requirement: 1200.0
+    beta: 1.0
+    normalizer: 1.0
+    tolerance: 0.0
+    budget: 0.02
+
+  - reservoir_id: XLD
+    type: "eco_release"
+    requirement: 1200.0
+    beta: 1.0
+    normalizer: 1.0
+    tolerance: 0.0
+    budget: 0.02
+
+  - reservoir_id: XJB
+    type: "eco_release"
+    requirement: 1700.0
+    beta: 1.0
+    normalizer: 1.0
+    tolerance: 0.0
+    budget: 0.02
+
+  - reservoir_id: THR
+    type: "eco_release"
+    requirement: 6000.0
+    beta: 1.0
+    normalizer: 1.0
+    tolerance: 0.0
+    budget: 0.02
+
+
+lagrangian:
+  initial_value: 0.0 #lambda的初始值
+  learning_rate: 0.05 #lambda学习率

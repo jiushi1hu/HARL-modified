@@ -1,71 +1,78 @@
 # This is the configuration file for the HAPPO algorithm.
-seed:
+#这里规定HAPPO怎么训练
+seed: #随机种子，控制实验随机性
+#强化学习里面会有很多随机过程，例如：
+#  网络参数初始化
+#  Actor按概率采样动作
+#  HAPPO Actor更新顺序
+# 所以需要seed
   # whether to use the specified seed
-  seed_specify: True
+  seed_specify: True #意思是使用下面明确给出的seed 如果是False的话就表示会自己随机生成一个seed
   # seed
   seed: 1
-device:
+device: #这部分决定PyTorch在哪里计算
   # whether to use CUDA
-  cuda: True
+  cuda: False
   # whether to set CUDA deterministic
   cuda_deterministic: True
   # arg to torch.set_num_threads
-  torch_threads: 4
+  torch_threads: 4 #这里控制的是PyTorch数学运算内部可以使用多少CPU线程
 train:
   # number of parallel environments for training data collection
-  n_rollout_threads: 20
+  n_rollout_threads: 1 #同时允许多少个环境来收集经验，这里1个就够了
   # number of total training steps
-  num_env_steps: 10000000
+  num_env_steps: 500000 #个总环境交互步
   # number of steps per environment per training data collection
-  episode_length: 200
+  episode_length: 200 #收集200个时间步的数据，然后进行一次HAPPO更新
   # logging interval
-  log_interval: 5
+  log_interval: 1 #表示每5次训练update打印一次日志
   # evaluation interval
-  eval_interval: 25
+  eval_interval: 50 #每25次update执行一次evaluation
   # whether to use ValueNorm
-  use_valuenorm: True
+  use_valuenorm: True #用来处理Critic学习目标数量级问题
   # whether to use linear learning rate decay
-  use_linear_lr_decay: False
+  use_linear_lr_decay: False #表示学习率不随着训练进度线性降低
   # whether to consider the case of truncation when an episode is done
-  use_proper_time_limits: True
+  use_proper_time_limits: True #区分真正终止terminal和因时间长度被截断truncation
   # if set, load models from this directory; otherwise, randomly initialise the models
-  model_dir: ~
-eval:
+  model_dir: ~ #yaml中～表示None，意识是不加载已有模型，从随机初始化开始训练
+eval: #evaluation的目标是：不参与网络更新，只检查当前策略表现
   # whether to use evaluation
-  use_eval: True
+  use_eval: True #表示启用evaluation
   # number of parallel environments for evaluation
-  n_eval_rollout_threads: 10
+  n_eval_rollout_threads: 1
   # number of episodes per evaluation
-  eval_episodes: 20
-render:
+  eval_episodes: 1
+render: #仿真
   # whether to use render
-  use_render: False
+  use_render: False #表示当前不是render模式，而是训练模式
   # number of episodes to render
   render_episodes: 10
-model:
+model: #这部分决定网络长什么样
   # network parameters
   # hidden sizes for mlp module in the network
-  hidden_sizes: [128, 128]
+  hidden_sizes: [128, 128] #表示网络有两层隐藏层
   # activation function, choose from sigmoid, tanh, relu, leaky_relu, selu
-  activation_func: relu
+  activation_func: relu #隐藏层激活函数
   # whether to use feature normalization
   use_feature_normalization: True
   # initialization method for network parameters, choose from xavier_uniform_, orthogonal_, ...
-  initialization_method: orthogonal_
+  initialization_method: orthogonal_ #表示网络权重采用Orthogonal Initialization即正交初始化，
+  #直观上可以理解为：网络刚开始时，让不同方向的信号尽量保持良好的尺度和独立性
   # gain of the output layer of the network.
-  gain: 0.01
+  gain: 0.01 #输出层初始化增益
   # recurrent parameters
   # whether to use rnn policy (data is not chunked for training)
   use_naive_recurrent_policy: False
   # whether to use rnn policy (data is chunked for training)
-  use_recurrent_policy: False
+  use_recurrent_policy: False #关闭标准recurrent policy
   # number of recurrent layers
-  recurrent_n: 1
+  recurrent_n: 1 #如果启用RNN，表示RNN层数为1
   # length of data chunk; only useful when use_recurrent_policy is True; episode_length has to be a multiple of data_chunk_length
   data_chunk_length: 10
   # optimizer parameters
   # actor learning rate
-  lr: 0.0005
+  lr: 0.0005 #alpha
   # critic learning rate
   critic_lr: 0.0005
   # eps in Adam
@@ -75,17 +82,17 @@ model:
   # parameters of diagonal Gaussian distribution
   std_x_coef: 1
   # parameters of diagonal Gaussian distribution
-  std_y_coef: 0.5
-algo:
+  std_y_coef: 0.5 #主要针对连续动作空间
+algo: #这是算法核心
   # ppo parameters
   # number of epochs for actor update
-  ppo_epoch: 5
+  ppo_epoch: 5 #表示一次rollout收集完成后：Actor对这一批数据重复训练5个epoch
   # number of epochs for critic update
   critic_epoch: 5
   # whether to use clipped value loss
   use_clipped_value_loss: True
   # clip parameter
-  clip_param: 0.2
+  clip_param: 0.2 #不允许一次策略更新把动作概率改得过猛
   # number of mini-batches per epoch for actor update
   actor_num_mini_batch: 1
   # number of mini-batches per epoch for critic update
@@ -101,9 +108,9 @@ algo:
   # whether to use Generalized Advantage Estimation (GAE)
   use_gae: True
   # discount factor
-  gamma: 0.99
+  gamma: 0.99 #折扣因子
   # GAE lambda
-  gae_lambda: 0.95
+  gae_lambda: 0.95 
   # whether to use huber loss
   use_huber_loss: True
   # whether to use policy active masks
@@ -113,9 +120,9 @@ algo:
   # method of aggregating the probability of multi-dimensional actions, choose from prod, mean
   action_aggregation: prod
   # whether to share parameter among actors
-  share_param: False
+  share_param: False #表示五库Actor不共享参数
   # whether to use a fixed optimisation order
-  fixed_order: False
-logger:
+  fixed_order: False #表示不固定Actor参数更新，每次随机permutation
+logger: #日志配置
   # logging directory
-  log_dir: "./results"
+  log_dir: "./results" #所有实验默认写到该文件夹

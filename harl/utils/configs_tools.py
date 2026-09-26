@@ -49,23 +49,72 @@ def get_task_name(env, env_args):
     """Get task name."""
     if env == "smac":
         task = env_args["map_name"]
+
     elif env == "smacv2":
         task = env_args["map_name"]
+
     elif env == "mamujoco":
-        task = f"{env_args['scenario']}-{env_args['agent_conf']}"
+        task = (
+            f"{env_args['scenario']}-"
+            f"{env_args['agent_conf']}"
+        )
+
     elif env == "pettingzoo_mpe":
         if env_args["continuous_actions"]:
-            task = f"{env_args['scenario']}-continuous"
+            task = (
+                f"{env_args['scenario']}-"
+                "continuous"
+            )
         else:
-            task = f"{env_args['scenario']}-discrete"
+            task = (
+                f"{env_args['scenario']}-"
+                "discrete"
+            )
+
     elif env == "gym":
         task = env_args["scenario"]
+
     elif env == "football":
         task = env_args["env_name"]
+
     elif env == "dexhands":
         task = env_args["task"]
+
     elif env == "lag":
-        task = f"{env_args['scenario']}-{env_args['task']}"
+        task = (
+            f"{env_args['scenario']}-"
+            f"{env_args['task']}"
+        )
+
+    elif env == "cascade_reservoir":
+        reservoir_order = tuple(
+            env_args["reservoir_order"]
+        )
+
+        expected_order = (
+            "WDD",
+            "BHT",
+            "XLD",
+            "XJB",
+            "THR",
+        )
+
+        if reservoir_order != expected_order:
+            raise ValueError(
+                "cascade_reservoir requires "
+                "reservoir_order = "
+                "WDD, BHT, XLD, XJB, THR"
+            )
+
+        task = "-".join(
+            reservoir_order
+        )
+
+    else:
+        raise NotImplementedError(
+            f"environment is not supported: {env}"
+        )
+
     return task
 
 

@@ -15,7 +15,7 @@ class HAPPO(OnPolicyBase):
             obs_space: (gym.spaces or list) observation space.
             act_space: (gym.spaces) action space.
             device: (torch.device) device to use for tensor operations.
-        """
+        """  #张量运算
         super(HAPPO, self).__init__(args, obs_space, act_space, device)
 
         self.clip_param = args["clip_param"]
@@ -49,7 +49,7 @@ class HAPPO(OnPolicyBase):
 
         old_action_log_probs_batch = check(old_action_log_probs_batch).to(**self.tpdv)
         adv_targ = check(adv_targ).to(**self.tpdv)
-        active_masks_batch = check(active_masks_batch).to(**self.tpdv)
+        active_masks_batch = check(active_masks_batch).to(**self.tpdv) 
         factor_batch = check(factor_batch).to(**self.tpdv)
 
         # Reshape to do evaluations for all steps in a single forward pass

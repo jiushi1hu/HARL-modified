@@ -1,0 +1,6 @@
+reservoir_id,hard_min_level_m,normal_upper_level_m,flood_limit_level_m,safety_upper_level_m
+WDD,945,975,952,986.17
+BHT,765,825,785,832.34
+XLD,540,600,560,609.47
+XJB,370,380,370,383
+THR,145,175,145,180.4
