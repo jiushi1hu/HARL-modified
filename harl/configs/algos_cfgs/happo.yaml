@@ -27,7 +27,9 @@ train:
   # logging interval
   log_interval: 1 #表示每5次训练update打印一次日志
   # evaluation interval
-  eval_interval: 50 #每25次update执行一次evaluation
+  eval_interval: 50 #每50次update执行一次evaluation
+  # Checkpoint interval in updates; initial and final weights are always saved.
+  save_interval: 50
   # whether to use ValueNorm
   use_valuenorm: True #用来处理Critic学习目标数量级问题
   # whether to use linear learning rate decay

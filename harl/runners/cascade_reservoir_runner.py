@@ -28,6 +28,7 @@ from harl.runners.on_policy_ha_runner import (
     OnPolicyHARunner,
 )
 from harl.utils.trans_tools import _t2n
+from harl.utils.configs_tools import save_config
 
 
 _RESERVOIR_ORDER = (
@@ -310,6 +311,12 @@ class CascadeReservoirRunner(OnPolicyHARunner):
             episodes
         )
 
+        # Preserve the policy used by the first rollout for fair evaluation.
+        self._save_training_checkpoint(0, initial=True)
+        save_interval = self.algo_args["train"].get(
+            "save_interval", self.algo_args["train"]["eval_interval"]
+        )
+
         for episode in range(
             1,
             episodes + 1,
@@ -404,6 +411,11 @@ class CascadeReservoirRunner(OnPolicyHARunner):
                 critic_train_info,
             ) = self.train()
 
+            # Save before evaluation so an evaluation failure cannot lose the
+            # just-completed training update. The last update always persists.
+            if episode % save_interval == 0 or episode == episodes:
+                self._save_training_checkpoint(episode, final=episode == episodes)
+
             if (
                 episode
                 % self.algo_args[
@@ -436,8 +448,6 @@ class CascadeReservoirRunner(OnPolicyHARunner):
                 ]:
                     self.prep_rollout()
                     self.eval()
-
-                self.save()
 
             self.after_update()
 
@@ -1433,6 +1443,35 @@ class CascadeReservoirRunner(OnPolicyHARunner):
 
         if self._constraint_components_ready:
             self.constraint_critic.prep_training()
+
+    def _save_training_checkpoint(self, completed_updates, *, initial=False, final=False):
+        """Save evaluation weights and their provenance; not an exact resume state."""
+        original_dir = self.save_dir
+        target = Path(original_dir) / "initial" if initial else Path(original_dir)
+        if initial:
+            # Never silently replace the baseline if run() is called twice.
+            target.mkdir(parents=True, exist_ok=False)
+        try:
+            self.save_dir = target
+            metadata_path = target / "checkpoint_metadata.json"
+            # An interrupted replacement must not retain an old completion marker.
+            metadata_path.unlink(missing_ok=True)
+            self.save()
+            save_config(self.args, self.algo_args, self.env_args, target)
+            metadata = {
+                "kind": "run_start" if initial else ("final" if final else "periodic"),
+                "completed_updates_in_run": completed_updates,
+                "training_steps_in_run": completed_updates
+                * self.algo_args["train"]["episode_length"]
+                * self.algo_args["train"]["n_rollout_threads"],
+                "source_model_dir": self.algo_args["train"]["model_dir"],
+                "observation_encoding": _OBSERVATION_ENCODING,
+                "exact_training_resume": False,
+            }
+            metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+        finally:
+            self.save_dir = original_dir
+        print(f"Saved {metadata['kind']} checkpoint: {target}", flush=True)
 
     def save(self):
         super().save()
@@ -2735,6 +2774,12 @@ class CascadeReservoirRunner(OnPolicyHARunner):
         algo_args,
         env_args,
     ):
+        save_interval = algo_args["train"].get(
+            "save_interval", algo_args["train"]["eval_interval"]
+        )
+        if isinstance(save_interval, bool) or not isinstance(save_interval, int) or save_interval <= 0:
+            raise ValueError("save_interval must be a positive integer")
+
         if (
             args[
                 "env"
