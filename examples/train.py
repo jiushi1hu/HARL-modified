@@ -22,47 +22,16 @@ def main():
         "--algo",
         type=str,
         default="happo",
-        choices=[
-            "happo",
-            "hatrpo",
-            "haa2c",
-            "haddpg",
-            "hatd3",
-            "hasac",
-            "had3qn",
-            "maddpg",
-            "matd3",
-            "mappo",
-        ],
-        help=(
-            "Algorithm name. Choose from: "
-            "happo, hatrpo, haa2c, haddpg, "
-            "hatd3, hasac, had3qn, maddpg, "
-            "matd3, mappo."
-        ),
+        choices=["happo"],
+        help="Algorithm for cascade reservoir scheduling.",
     )
 
     parser.add_argument(
         "--env",
         type=str,
-        default="pettingzoo_mpe",
-        choices=[
-            "smac",
-            "mamujoco",
-            "pettingzoo_mpe",
-            "gym",
-            "football",
-            "dexhands",
-            "smacv2",
-            "lag",
-            "cascade_reservoir",
-        ],
-        help=(
-            "Environment name. Choose from: "
-            "smac, mamujoco, pettingzoo_mpe, "
-            "gym, football, dexhands, smacv2, "
-            "lag, cascade_reservoir."
-        ),
+        default="cascade_reservoir",
+        choices=["cascade_reservoir"],
+        help="Five-reservoir cascade environment.",
     )
 
     parser.add_argument(
@@ -170,60 +139,12 @@ def main():
         env_args,
     )
 
-    if args["env"] == "dexhands":
-        import isaacgym
+    if args["env"] != "cascade_reservoir" or args["algo"] != "happo":
+        raise ValueError("This repository supports cascade_reservoir with happo only")
 
-    if args["env"] == "dexhands":
-        algo_args[
-            "eval"
-        ][
-            "use_eval"
-        ] = False
+    from harl.runners.cascade_reservoir_runner import CascadeReservoirRunner
 
-        algo_args[
-            "train"
-        ][
-            "episode_length"
-        ] = env_args[
-            "hands_episode_length"
-        ]
-
-    if (
-        args["env"]
-        == "cascade_reservoir"
-    ):
-        if args["algo"] != "happo":
-            raise ValueError(
-                "cascade_reservoir currently "
-                "requires --algo happo"
-            )
-
-        from harl.runners.cascade_reservoir_runner import (
-            CascadeReservoirRunner,
-        )
-
-        runner = (
-            CascadeReservoirRunner(
-                args,
-                algo_args,
-                env_args,
-            )
-        )
-
-    else:
-        from harl.runners import (
-            RUNNER_REGISTRY,
-        )
-
-        runner = (
-            RUNNER_REGISTRY[
-                args["algo"]
-            ](
-                args,
-                algo_args,
-                env_args,
-            )
-        )
+    runner = CascadeReservoirRunner(args, algo_args, env_args)
 
     runner.run()
 

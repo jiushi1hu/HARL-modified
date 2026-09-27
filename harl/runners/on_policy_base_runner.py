@@ -656,7 +656,6 @@ class OnPolicyBaseRunner:
                         break
         else:
             # this env does not need manual expansion of the num_of_parallel_envs dimension
-            # such as dexhands, which instantiates a parallel env of 64 pair of hands
             for _ in range(self.algo_args["render"]["render_episodes"]):
                 eval_obs, _, eval_available_actions = self.envs.reset()
                 eval_rnn_states = np.zeros(
@@ -703,11 +702,6 @@ class OnPolicyBaseRunner:
                     if eval_dones[0][0]:
                         print(f"total reward of this episode: {rewards}")
                         break
-        if "smac" in self.args["env"]:  # replay for smac, no rendering
-            if "v2" in self.args["env"]:
-                self.envs.env.save_replay()
-            else:
-                self.envs.save_replay()
 
     def prep_rollout(self):
         """Prepare for rollout."""
