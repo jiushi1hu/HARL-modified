@@ -407,7 +407,7 @@ def evaluate_local_feasibility(
     )
 
     bounds = _resolve_bounds(
-        constraints
+        constraints, inflow_m3s=inflow
     )
 
     candidate_releases = (
@@ -584,12 +584,13 @@ def evaluate_local_feasibility(
 
 def _resolve_bounds(
     constraints,
+    *, inflow_m3s: float,
 ) -> EffectiveS201Bounds:
     if isinstance(
         constraints,
         ConstraintContext,
     ):
-        return constraints.resolve()
+        return constraints.resolve(inflow_m3s=inflow_m3s)
 
     if isinstance(
         constraints,

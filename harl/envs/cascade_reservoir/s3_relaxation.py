@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from numbers import Integral
 from typing import Mapping, Optional, Sequence, Tuple
 
@@ -16,6 +16,7 @@ from harl.envs.cascade_reservoir.safety.constraint_context import (
     P1Constraints,
     P2Constraints,
     P3Constraints,
+    P4Constraints,
     ReleaseBounds,
 )
 from harl.envs.cascade_reservoir.safety.s201_local_feasibility import (
@@ -245,14 +246,14 @@ class SafetyRecoveryResult:
     # 1 = maximum configured P3 relaxation
     p3_relaxation_fraction: float
 
-    # Normal / P4 / P3 modes:
+    # Normal / P4 / P3 / P2 relaxed modes:
     #     S203 result under the recovered constraints.
     #
-    # P2 fallback:
+    # Final minimum-violation fallback:
     #     P1-only S203 result.
     extendability: ExtendabilityResult
 
-    # Present only in P2 fallback.
+    # Present only in final fallback.
     forced_joint_action: Optional[
         Tuple[int, ...]
     ]
@@ -262,6 +263,12 @@ class SafetyRecoveryResult:
     # One action dimension per reservoir.
     num_actions: Tuple[int, ...]
 
+    p2_relaxation_fraction: float = 0.0
+    # Bounded recovery limits (not enforced by final P1-only fallback).
+    effective_p2_bounds: Tuple[LevelBounds, ...] = ()
+    p3_total_violation: float = 0.0
+    p4_total_violation: float = 0.0
+
     def __post_init__(
         self,
     ):
@@ -269,6 +276,8 @@ class SafetyRecoveryResult:
             "normal",
             "p4_relaxed",
             "p3_relaxed",
+            "p2_relaxed",
+            "min_violation_fallback",
             "p2_fallback",
         }
 
@@ -388,17 +397,25 @@ class SafetyRecoveryResult:
                     "contain five actions"
                 )
 
-        if mode == "p2_fallback":
+        if mode in {"p2_fallback", "min_violation_fallback"}:
             if forced is None:
                 raise ValueError(
-                    "p2_fallback requires "
+                    "final fallback requires "
                     "forced_joint_action"
                 )
         elif forced is not None:
             raise ValueError(
                 "forced_joint_action is only "
-                "valid in p2_fallback mode"
+                "valid in final fallback mode"
             )
+
+        fraction = _nonnegative_finite(self.p2_relaxation_fraction, "p2_relaxation_fraction")
+        if fraction > 1.0:
+            raise ValueError("p2_relaxation_fraction must be in [0, 1]")
+        for name in ("p3_total_violation", "p4_total_violation"):
+            _nonnegative_finite(getattr(self, name), name)
+        if self.effective_p2_bounds and len(self.effective_p2_bounds) != _NUM_RESERVOIRS:
+            raise ValueError("effective_p2_bounds must contain five bounds")
 
         object.__setattr__(
             self,
@@ -526,8 +543,9 @@ class S3RelaxationSolver:
 
         1. minimally relax P4;
         2. if necessary, minimally relax P3;
-        3. if still empty, enforce P1 only and choose the
-           P2-minimum-violation joint action.
+        3. minimally relax P2 within explicit configured bounds;
+        4. only if all maxima fail, choose a P1-safe joint path with
+           lexicographically minimum (P2, P3, P4) operational violation.
 
     P1 is never relaxed.
     """
@@ -538,6 +556,8 @@ class S3RelaxationSolver:
         p3_config: Mapping,
         p4_config: Mapping,
         relaxation_config: Mapping,
+        p2_config: Mapping,
+        fallback_config: Mapping,
     ):
         self.reservoir_order = tuple(
             str(
@@ -700,6 +720,22 @@ class S3RelaxationSolver:
                 "must be positive"
             )
 
+        for name in ("max_upper_relaxation_m", "max_lower_relaxation_m"):
+            values = p2_config[name]
+            if set(values) != set(self.reservoir_order):
+                raise ValueError("P2 " + name + " must define exactly the five reservoirs")
+            setattr(self, name, {key: _nonnegative_finite(values[key], "p2." + name + "." + key)
+                                for key in self.reservoir_order})
+        expected = {
+            "comparison": "lexicographic_p2_p3_p4", "reference": "normal_bounds",
+            "p2_normalization": "p1_level_span", "p3_normalization": "normal_change_limits",
+            "p4_normalization": "normal_required_release", "tie_break": "joint_action_lexicographic",
+        }
+        if dict(fallback_config) != expected:
+            raise ValueError("Unsupported or missing explicit fallback comparison configuration")
+        if self.release_change_floor_m3s <= 0.0:
+            raise ValueError("P3 release-change normalization requires a positive configured floor")
+
     def solve(
         self,
         states: Sequence[
@@ -768,6 +804,7 @@ class S3RelaxationSolver:
                 forced_joint_action=None,
                 p2_total_violation=0.0,
                 num_actions=num_actions,
+                effective_p2_bounds=tuple(state.p2.level for state in states),
             )
 
         # ----------------------------------------------------------
@@ -826,6 +863,7 @@ class S3RelaxationSolver:
                     forced_joint_action=None,
                     p2_total_violation=0.0,
                     num_actions=num_actions,
+                    effective_p2_bounds=tuple(state.p2.level for state in states),
                 )
 
             # P4 has reached its maximum allowed relaxation.
@@ -894,44 +932,69 @@ class S3RelaxationSolver:
                     forced_joint_action=None,
                     p2_total_violation=0.0,
                     num_actions=num_actions,
+                    effective_p2_bounds=tuple(state.p2.level for state in states),
                 )
 
-        # ----------------------------------------------------------
-        # P2 minimum-violation fallback.
-        #
-        # Patent semantics:
-        #     P1 remains absolute.
-        #
-        # P4 and P3 have already exhausted their allowed relaxation
-        # ranges.  We now search the P1-safe joint-action graph and
-        # select the complete path having minimum total P2 violation.
-        # ----------------------------------------------------------
-        (
-            forced_joint_action,
-            total_p2_violation,
-            p1_evaluation,
-        ) = self._solve_p2_fallback(
-            states
+        # P3/P4 are now at their allowed maxima. P2 must be tried
+        # within its own configured range before the final fallback.
+        maximum_states = self._relax_p2_states(states, 1.0)
+        maximum_p2 = self._evaluate_s2(
+            states=maximum_states, use_p2=True,
+            p3_factor=self.max_p3_relaxation_factor, p4_ratio=p4_for_p3,
+        )
+        if maximum_p2.extendability.has_joint_feasible_action:
+            lower, upper = 0.0, 1.0
+            recovered = maximum_p2
+            effective_states = maximum_states
+            for _ in range(self.max_iterations):
+                if upper - lower <= self.relaxation_tolerance:
+                    break
+                midpoint = (lower + upper) / 2.0
+                candidate_states = self._relax_p2_states(states, midpoint)
+                candidate = self._evaluate_s2(
+                    states=candidate_states, use_p2=True,
+                    p3_factor=self.max_p3_relaxation_factor, p4_ratio=p4_for_p3,
+                )
+                if candidate.extendability.has_joint_feasible_action:
+                    upper, recovered, effective_states = midpoint, candidate, candidate_states
+                else:
+                    lower = midpoint
+            return SafetyRecoveryResult(
+                mode="p2_relaxed", p4_release_inflow_ratio=p4_for_p3,
+                p3_relaxation_fraction=1.0, p2_relaxation_fraction=upper,
+                effective_p2_bounds=tuple(state.p2.level for state in effective_states),
+                extendability=recovered.extendability, forced_joint_action=None,
+                p2_total_violation=0.0, num_actions=num_actions,
+            )
+
+        action, totals, p1_evaluation = self._solve_min_violation_fallback(
+            states, p4_active=(p4_ratio is not None),
+        )
+        return SafetyRecoveryResult(
+            mode="min_violation_fallback", p4_release_inflow_ratio=p4_for_p3,
+            p3_relaxation_fraction=1.0, p2_relaxation_fraction=1.0,
+            effective_p2_bounds=tuple(state.p2.level for state in maximum_states),
+            extendability=p1_evaluation.extendability, forced_joint_action=action,
+            p2_total_violation=float(totals[0]), p3_total_violation=float(totals[1]),
+            p4_total_violation=float(totals[2]), num_actions=num_actions,
         )
 
-        return SafetyRecoveryResult(
-            mode="p2_fallback",
-            p4_release_inflow_ratio=(
-                p4_for_p3
-            ),
-            p3_relaxation_fraction=1.0,
-            extendability=(
-                p1_evaluation
-                .extendability
-            ),
-            forced_joint_action=(
-                forced_joint_action
-            ),
-            p2_total_violation=(
-                total_p2_violation
-            ),
-            num_actions=num_actions,
-        )
+    def _relax_p2_states(self, states, fraction):
+        """Return candidate contexts without mutating the physical states."""
+        fraction = _nonnegative_finite(fraction, "P2 relaxation fraction")
+        if fraction > 1.0:
+            raise ValueError("P2 relaxation fraction must be in [0, 1]")
+        relaxed = []
+        for state in states:
+            lower, upper = state.p2.level.min_level_m, state.p2.level.max_level_m
+            if lower is not None:
+                lower = max(state.p1.level.min_level_m,
+                            lower - fraction * self.max_lower_relaxation_m[state.reservoir_id])
+            if upper is not None:
+                upper = min(state.p1.level.max_level_m,
+                            upper + fraction * self.max_upper_relaxation_m[state.reservoir_id])
+            relaxed.append(replace(state, p2=P2Constraints(level=LevelBounds(lower, upper))))
+        return tuple(relaxed)
 
     def _search_minimum_p4_relaxation(
         self,
@@ -1179,113 +1242,14 @@ class S3RelaxationSolver:
         p3_factor: Optional[float],
         p4_ratio: Optional[float],
     ) -> LocalFeasibilityResult:
-        """Run the canonical S201 implementation plus dynamic P4."""
-
-        inflow = _nonnegative_finite(
-            inflow_m3s,
-            (
-                f"{state.reservoir_id}."
-                "candidate_inflow_m3s"
-            ),
+        """S201 resolves all active constraints using this candidate's inflow."""
+        context = self._build_context(
+            state=state, use_p2=use_p2, p3_factor=p3_factor, p4_ratio=p4_ratio,
         )
-
-        context = (
-            self._build_context(
-                state=state,
-                use_p2=use_p2,
-                p3_factor=p3_factor,
-            )
-        )
-
-        result = (
-            evaluate_local_feasibility(
-                physics=state.physics,
-                mapper=state.mapper,
-                storage_m3=(
-                    state.storage_m3
-                ),
-                inflow_m3s=inflow,
-                constraints=context,
-            )
-        )
-
-        if p4_ratio is None:
-            return result
-
-        p4_ratio = (
-            _nonnegative_finite(
-                p4_ratio,
-                "p4_ratio",
-            )
-        )
-
-        # If P1/P2/P3 itself is empty there is no need to
-        # construct another result merely to apply P4.
-        if result.bounds.is_empty:
-            return result
-
-        p4_min_release = (
-            p4_ratio
-            * inflow
-        )
-
-        candidate_releases = (
-            result
-            .candidate_releases_m3s
-        )
-
-        p4_mask = (
-            candidate_releases
-            >= (
-                p4_min_release
-                - _FLOW_TOLERANCE_M3S
-            )
-        )
-
-        feasible_mask = (
-            result.feasible_mask
-            & p4_mask
-        )
-
-        safe_min_release = max(
-            float(
-                result
-                .safe_min_release_m3s
-            ),
-            p4_min_release,
-        )
-
-        # Rebuild the canonical result object so S202 continues
-        # to receive exactly the same S201 result type.
-        return LocalFeasibilityResult(
-            bounds=result.bounds,
-            current_storage_m3=(
-                result.current_storage_m3
-            ),
-            inflow_m3s=(
-                result.inflow_m3s
-            ),
-            timestep_seconds=(
-                result.timestep_seconds
-            ),
-            low_storage_m3=(
-                result.low_storage_m3
-            ),
-            high_storage_m3=(
-                result.high_storage_m3
-            ),
-            safe_min_release_m3s=(
-                safe_min_release
-            ),
-            safe_max_release_m3s=(
-                result.safe_max_release_m3s
-            ),
-            candidate_releases_m3s=(
-                candidate_releases
-            ),
-            feasible_mask=(
-                feasible_mask
-            ),
+        return evaluate_local_feasibility(
+            physics=state.physics, mapper=state.mapper,
+            storage_m3=state.storage_m3, inflow_m3s=inflow_m3s,
+            constraints=context,
         )
 
     def _build_context(
@@ -1294,6 +1258,7 @@ class S3RelaxationSolver:
         state: ReservoirSafetyState,
         use_p2: bool,
         p3_factor: Optional[float],
+        p4_ratio: Optional[float],
     ) -> ConstraintContext:
         p3 = None
 
@@ -1313,6 +1278,7 @@ class S3RelaxationSolver:
                 else None
             ),
             p3=p3,
+            p4=None if p4_ratio is None else P4Constraints(p4_ratio),
         )
 
     def _build_p3_constraints(
@@ -1420,435 +1386,109 @@ class S3RelaxationSolver:
             release=release_constraint,
         )
 
-    def _solve_p2_fallback(
-        self,
-        states,
-    ):
-        """Choose the P1-safe joint action with minimum P2 violation."""
-
-        # Build the entire cascade graph again with P1 only.
-        #
-        # This deliberately still uses the official S201/S202/S203
-        # implementations instead of reproducing another feasibility
-        # calculation inside S3.
-        p1_evaluation = (
-            self._evaluate_s2(
-                states=states,
-                use_p2=False,
-                p3_factor=None,
-                p4_ratio=None,
-            )
+    def _solve_min_violation_fallback(self, states, *, p4_active):
+        """Optimize a complete P1-safe path; never select reservoirs independently."""
+        graph = self._evaluate_s2(states=states, use_p2=False, p3_factor=None, p4_ratio=None)
+        if not graph.extendability.has_joint_feasible_action:
+            raise RuntimeError("No P1-safe joint action exists. P1 cannot be relaxed.")
+        root_cost = self._operational_violation_vector(
+            states[0], states[0].forcing_inflow_m3s,
+            graph.wdd_local_result.feasible_mask, p4_active,
         )
+        edges = []
+        for index, compatibility in enumerate(graph.compatibility_results):
+            matrix = compatibility.compatibility_matrix
+            edge = np.full(matrix.shape + (3,), np.inf, dtype=np.float64)
+            for upstream in range(matrix.shape[0]):
+                if np.any(matrix[upstream]):
+                    edge[upstream] = self._operational_violation_vector(
+                        states[index + 1], compatibility.candidate_inflows_m3s[upstream],
+                        matrix[upstream], p4_active,
+                    )
+            edges.append(edge)
+        action, totals = self._minimum_lexicographic_path(root_cost, edges)
+        return action, totals, graph
 
-        if not (
-            p1_evaluation
-            .extendability
-            .has_joint_feasible_action
-        ):
-            raise RuntimeError(
-                "No P1-safe joint action exists. "
-                "P1 is an absolute physical "
-                "safety constraint and cannot "
-                "be relaxed."
-            )
-
-        root_state = states[
-            0
-        ]
-
-        root_cost = (
-            self._p2_violation_vector(
-                state=root_state,
-                inflow_m3s=(
-                    root_state
-                    .forcing_inflow_m3s
-                ),
-                feasible_mask=(
-                    p1_evaluation
-                    .wdd_local_result
-                    .feasible_mask
-                ),
-            )
-        )
-
-        # Dynamic programming state:
-        #
-        # dynamic_cost[a_i]
-        # =
-        # minimum accumulated P2 violation of all partial paths
-        # ending at action a_i.
-        dynamic_cost = (
-            root_cost.copy()
-        )
-
-        backpointers = []
-
-        for link_index, compatibility in enumerate(
-            p1_evaluation
-            .compatibility_results
-        ):
-            downstream_state = states[
-                link_index + 1
-            ]
-
-            matrix = (
-                compatibility
-                .compatibility_matrix
-            )
-
-            edge_cost = np.full(
-                matrix.shape,
-                np.inf,
-                dtype=np.float64,
-            )
-
-            for upstream_action in range(
-                matrix.shape[0]
-            ):
-                compatible_mask = (
-                    matrix[
-                        upstream_action,
-                        :
-                    ]
-                )
-
-                if not np.any(
-                    compatible_mask
-                ):
+    @staticmethod
+    def _minimum_lexicographic_path(root_cost, edges):
+        """Additive three-tier DP; exact ties use the full upstream-first action tuple."""
+        costs = np.asarray(root_cost, dtype=np.float64)
+        paths = [(i,) if np.isfinite(cost).all() else None for i, cost in enumerate(costs)]
+        for edge in edges:
+            total = costs[:, None, :] + edge
+            next_cost = np.full((edge.shape[1], 3), np.inf)
+            next_paths = [None] * edge.shape[1]
+            for downstream in range(edge.shape[1]):
+                valid = np.flatnonzero(np.isfinite(total[:, downstream]).all(axis=1))
+                if not valid.size:
                     continue
+                predecessor = min(valid, key=lambda i: (tuple(total[i, downstream]), paths[i]))
+                next_cost[downstream] = total[predecessor, downstream]
+                next_paths[downstream] = paths[predecessor] + (downstream,)
+            costs, paths = next_cost, next_paths
+        valid = [i for i, path in enumerate(paths) if path is not None]
+        if not valid:
+            raise RuntimeError("P1 graph has no finite-cost complete fallback path")
+        final = min(valid, key=lambda i: (tuple(costs[i]), paths[i]))
+        return paths[final], costs[final].copy()
 
-                candidate_inflow = float(
-                    compatibility
-                    .candidate_inflows_m3s[
-                        upstream_action
-                    ]
-                )
+    def operational_violation_components(self, state, next_levels, releases, inflow_m3s, p4_active):
+        """Raw components and normalized tier scores against ORIGINAL normal bounds.
 
-                downstream_cost = (
-                    self._p2_violation_vector(
-                        state=(
-                            downstream_state
-                        ),
-                        inflow_m3s=(
-                            candidate_inflow
-                        ),
-                        feasible_mask=(
-                            compatible_mask
-                        ),
-                    )
-                )
+        The return shape is (..., 5) for raw [P2 lower, P2 upper,
+        P3 level, P3 release, P4 release] and (..., 3) for [P2, P3, P4].
+        These are Layer-1 diagnostics, not the Layer-2 constraint costs.
+        """
+        levels, releases = np.broadcast_arrays(np.asarray(next_levels, dtype=np.float64),
+                                               np.asarray(releases, dtype=np.float64))
+        raw = np.zeros(levels.shape + (5,), dtype=np.float64)
+        def excess(value, tolerance):
+            return np.where(value > tolerance, value, 0.0)
+        if state.p2.level.min_level_m is not None:
+            raw[..., 0] = excess(state.p2.level.min_level_m - levels, _LEVEL_TOLERANCE_M)
+        if state.p2.level.max_level_m is not None:
+            raw[..., 1] = excess(levels - state.p2.level.max_level_m, _LEVEL_TOLERANCE_M)
+        level_limit = self.level_change_limit_m[state.reservoir_id]
+        current_level = state.physics.level_from_storage(state.storage_m3)
+        raw[..., 2] = excess(np.abs(levels - current_level) - level_limit, _LEVEL_TOLERANCE_M)
+        release_limit = None
+        if state.previous_release_m3s is not None:
+            release_limit = max(self.release_change_ratio * state.previous_release_m3s,
+                                self.release_change_floor_m3s)
+            raw[..., 3] = excess(np.abs(releases - state.previous_release_m3s) - release_limit,
+                                 _FLOW_TOLERANCE_M3S)
+        requirement = self.normal_p4_ratio * float(inflow_m3s) if p4_active else 0.0
+        if requirement > 0.0:
+            raw[..., 4] = excess(requirement - releases, _FLOW_TOLERANCE_M3S)
+        p1_span = state.p1.level.max_level_m - state.p1.level.min_level_m
+        if p1_span <= 0.0:
+            raise ValueError("P2 normalization requires a positive P1 level span")
+        scores = np.zeros(levels.shape + (3,), dtype=np.float64)
+        scores[..., 0] = (raw[..., 0] + raw[..., 1]) / p1_span
+        scores[..., 1] = raw[..., 2] / level_limit
+        if release_limit is not None:
+            scores[..., 1] += raw[..., 3] / release_limit
+        if requirement > 0.0:
+            scores[..., 2] = raw[..., 4] / requirement
+        return raw, scores
 
-                edge_cost[
-                    upstream_action,
-                    :
-                ] = downstream_cost
-
-            total_cost = (
-                dynamic_cost[
-                    :,
-                    np.newaxis,
-                ]
-                + edge_cost
-            )
-
-            predecessor = np.argmin(
-                total_cost,
-                axis=0,
-            )
-
-            next_cost = total_cost[
-                predecessor,
-                np.arange(
-                    total_cost.shape[1]
-                ),
-            ]
-
-            invalid = ~np.isfinite(
-                next_cost
-            )
-
-            predecessor = (
-                predecessor.astype(
-                    np.int64
-                )
-            )
-
-            predecessor[
-                invalid
-            ] = -1
-
-            backpointers.append(
-                predecessor
-            )
-
-            dynamic_cost = (
-                next_cost
-            )
-
-        final_action = int(
-            np.argmin(
-                dynamic_cost
-            )
-        )
-
-        minimum_cost = float(
-            dynamic_cost[
-                final_action
-            ]
-        )
-
-        if not math.isfinite(
-            minimum_cost
-        ):
-            raise RuntimeError(
-                "P1-safe S203 graph is nonempty, "
-                "but P2 fallback could not "
-                "construct a finite-cost path"
-            )
-
-        joint_action = [
-            -1
-            for _ in range(
-                _NUM_RESERVOIRS
-            )
-        ]
-
-        joint_action[
-            -1
-        ] = final_action
-
-        for reservoir_index in range(
-            _NUM_RESERVOIRS - 1,
-            0,
-            -1,
-        ):
-            predecessor = int(
-                backpointers[
-                    reservoir_index - 1
-                ][
-                    joint_action[
-                        reservoir_index
-                    ]
-                ]
-            )
-
-            if predecessor < 0:
-                raise RuntimeError(
-                    "invalid P2 fallback "
-                    "backpointer"
-                )
-
-            joint_action[
-                reservoir_index - 1
-            ] = predecessor
-
-        return (
-            tuple(
-                joint_action
-            ),
-            minimum_cost,
-            p1_evaluation,
-        )
-
-    def _p2_violation_vector(
-        self,
-        *,
-        state: ReservoirSafetyState,
-        inflow_m3s: float,
-        feasible_mask,
-    ) -> np.ndarray:
-        """Compute normalized P2 violation for each P1-safe action."""
-
-        releases = np.asarray(
-            state.mapper
-            .candidate_releases_m3s,
-            dtype=np.float64,
-        )
-
-        feasible_mask = np.asarray(
-            feasible_mask,
-            dtype=bool,
-        )
-
-        if feasible_mask.shape != (
-            releases.shape
-        ):
-            raise ValueError(
-                f"{state.reservoir_id}: "
-                "P2 cost feasible mask has "
-                "invalid shape"
-            )
-
-        costs = np.full(
-            releases.shape,
-            np.inf,
-            dtype=np.float64,
-        )
-
-        feasible_indices = (
-            np.flatnonzero(
-                feasible_mask
-            )
-        )
-
-        if feasible_indices.size == 0:
+    def _operational_violation_vector(self, state, inflow_m3s, feasible_mask, p4_active):
+        releases = np.asarray(state.mapper.candidate_releases_m3s, dtype=np.float64)
+        feasible_mask = np.asarray(feasible_mask, dtype=bool)
+        if feasible_mask.shape != releases.shape:
+            raise ValueError("operational violation mask has invalid shape")
+        costs = np.full(releases.shape + (3,), np.inf)
+        indices = np.flatnonzero(feasible_mask)
+        if not indices.size:
             return costs
-
-        timestep_seconds = (
-            _positive_finite(
-                state.physics
-                .timestep_seconds,
-                (
-                    f"{state.reservoir_id}."
-                    "timestep_seconds"
-                ),
-            )
+        storage = state.storage_m3 + (float(inflow_m3s) - releases[indices]) * state.physics.timestep_seconds
+        # P1 already checked by S201. Protect interpolation only at numerical boundaries.
+        storage = np.clip(storage, state.physics.storage_from_level(state.p1.level.min_level_m),
+                          state.physics.storage_from_level(state.p1.level.max_level_m))
+        levels = self._levels_from_storage(state.physics, storage)
+        _, costs[indices] = self.operational_violation_components(
+            state, levels, releases[indices], inflow_m3s, p4_active,
         )
-
-        next_storage = (
-            state.storage_m3
-            + (
-                float(
-                    inflow_m3s
-                )
-                - releases[
-                    feasible_indices
-                ]
-            )
-            * timestep_seconds
-        )
-
-        p1_min_level = float(
-            state.p1.level.min_level_m
-        )
-
-        p1_max_level = float(
-            state.p1.level.max_level_m
-        )
-
-        p1_min_storage = float(
-            state.physics.storage_from_level(
-                p1_min_level
-            )
-        )
-
-        p1_max_storage = float(
-            state.physics.storage_from_level(
-                p1_max_level
-            )
-        )
-
-        # P1 feasibility has already been checked by S201.
-        # Clipping only protects the strict interpolation routine
-        # against tiny floating-point boundary excursions.
-        next_storage = np.clip(
-            next_storage,
-            p1_min_storage,
-            p1_max_storage,
-        )
-
-        next_levels = (
-            self._levels_from_storage(
-                state.physics,
-                next_storage,
-            )
-        )
-
-        p2_min_level = (
-            state.p2.level.min_level_m
-        )
-
-        p2_max_level = (
-            state.p2.level.max_level_m
-        )
-
-        violation = np.zeros(
-            next_levels.shape,
-            dtype=np.float64,
-        )
-
-        if p2_max_level is not None:
-            p2_max_level = float(
-                p2_max_level
-            )
-
-            upper_mask = (
-                next_levels
-                > (
-                    p2_max_level
-                    + _LEVEL_TOLERANCE_M
-                )
-            )
-
-            if np.any(
-                upper_mask
-            ):
-                denominator = (
-                    p1_max_level
-                    - p2_max_level
-                )
-
-                if denominator <= 0.0:
-                    violation[
-                        upper_mask
-                    ] = np.inf
-
-                else:
-                    violation[
-                        upper_mask
-                    ] += (
-                        (
-                            next_levels[
-                                upper_mask
-                            ]
-                            - p2_max_level
-                        )
-                        / denominator
-                    )
-
-        if p2_min_level is not None:
-            p2_min_level = float(
-                p2_min_level
-            )
-
-            lower_mask = (
-                next_levels
-                < (
-                    p2_min_level
-                    - _LEVEL_TOLERANCE_M
-                )
-            )
-
-            if np.any(
-                lower_mask
-            ):
-                denominator = (
-                    p2_min_level
-                    - p1_min_level
-                )
-
-                if denominator <= 0.0:
-                    violation[
-                        lower_mask
-                    ] = np.inf
-
-                else:
-                    violation[
-                        lower_mask
-                    ] += (
-                        (
-                            p2_min_level
-                            - next_levels[
-                                lower_mask
-                            ]
-                        )
-                        / denominator
-                    )
-
-        costs[
-            feasible_indices
-        ] = violation
-
         return costs
 
     def _validate_states(

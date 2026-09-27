@@ -224,6 +224,8 @@ class CascadeReservoirRunner(OnPolicyHARunner):
                     constraint_ids
                 ),
                 budgets=budgets,
+                normalizers=[spec.normalizer for spec in constraint_evaluator.specs],
+                tolerances=[spec.tolerance for spec in constraint_evaluator.specs],
             )
         )
 
@@ -871,6 +873,7 @@ class CascadeReservoirRunner(OnPolicyHARunner):
         (
             constraint_costs,
             constraint_active_flags,
+            constraint_raw_violations,
         ) = (
             self._extract_constraint_feedback(
                 infos
@@ -1037,6 +1040,7 @@ class CascadeReservoirRunner(OnPolicyHARunner):
             costs=(
                 constraint_costs
             ),
+            raw_violations=constraint_raw_violations,
             active_flags=(
                 constraint_active_flags
             ),
@@ -1141,6 +1145,22 @@ class CascadeReservoirRunner(OnPolicyHARunner):
             )
         )
 
+        # Freeze A_L using rollout values and pre-update normalizers above.
+        # Critics may update their normalizers; never recompute this batch's
+        # Actor advantages after these updates.
+        reward_critic_train_info = (
+            self.critic.train(
+                self.critic_buffer,
+                self.value_normalizer,
+            )
+        )
+
+        constraint_critic_train_info = (
+            self.constraint_critic.train(
+                self.constraint_buffer
+            )
+        )
+
         if self.fixed_order:
             agent_order = list(
                 range(
@@ -1188,74 +1208,6 @@ class CascadeReservoirRunner(OnPolicyHARunner):
                         ],
                     )
                 )
-
-            (
-                old_actions_logprob,
-                _,
-                _,
-            ) = (
-                self.actor[
-                    agent_id
-                ].evaluate_actions(
-                    actor_buffer
-                    .obs[
-                        :-1
-                    ]
-                    .reshape(
-                        -1,
-                        *actor_buffer
-                        .obs.shape[
-                            2:
-                        ],
-                    ),
-                    actor_buffer
-                    .rnn_states[
-                        0:1
-                    ]
-                    .reshape(
-                        -1,
-                        *actor_buffer
-                        .rnn_states
-                        .shape[
-                            2:
-                        ],
-                    ),
-                    actor_buffer
-                    .actions
-                    .reshape(
-                        -1,
-                        *actor_buffer
-                        .actions
-                        .shape[
-                            2:
-                        ],
-                    ),
-                    actor_buffer
-                    .masks[
-                        :-1
-                    ]
-                    .reshape(
-                        -1,
-                        *actor_buffer
-                        .masks.shape[
-                            2:
-                        ],
-                    ),
-                    available_actions,
-                    actor_buffer
-                    .active_masks[
-                        :-1
-                    ]
-                    .reshape(
-                        -1,
-                        *actor_buffer
-                        .active_masks
-                        .shape[
-                            2:
-                        ],
-                    ),
-                )
-            )
 
             actor_train_info = (
                 self.actor[
@@ -1336,6 +1288,16 @@ class CascadeReservoirRunner(OnPolicyHARunner):
                 )
             )
 
+            # Denominator is the actual stored behavior policy probability,
+            # matching HAPPO.update(), not a fresh pre-update policy evaluation.
+            old_actions_logprob = torch.as_tensor(
+                actor_buffer.action_log_probs.reshape(
+                    -1, *actor_buffer.action_log_probs.shape[2:]
+                ),
+                dtype=new_actions_logprob.dtype,
+                device=new_actions_logprob.device,
+            )
+
             factor = (
                 factor
                 * _t2n(
@@ -1366,19 +1328,6 @@ class CascadeReservoirRunner(OnPolicyHARunner):
             )
 
             actor_train_infos[agent_id] = actor_train_info
-
-        reward_critic_train_info = (
-            self.critic.train(
-                self.critic_buffer,
-                self.value_normalizer,
-            )
-        )
-
-        constraint_critic_train_info = (
-            self.constraint_critic.train(
-                self.constraint_buffer
-            )
-        )
 
         constraint_statistics = (
             self.constraint_buffer
@@ -2037,224 +1986,33 @@ class CascadeReservoirRunner(OnPolicyHARunner):
             infos
         )
 
-        costs = np.empty(
-            (
-                num_threads,
-                self.num_constraints,
-            ),
-            dtype=np.float32,
-        )
-
-        active_flags = np.empty(
-            (
-                num_threads,
-                self.num_constraints,
-            ),
-            dtype=np.float32,
-        )
-
-        for thread_id in range(
-            num_threads
-        ):
-            agent_infos = infos[
-                thread_id
-            ]
-
-            if len(
-                agent_infos
-            ) != self.num_agents:
-                raise ValueError(
-                    "infos must contain one "
-                    "dictionary per reservoir"
-                )
-
-            reference_info = (
-                agent_infos[
-                    0
-                ]
-            )
-
-            if not isinstance(
-                reference_info,
-                Mapping,
-            ):
-                raise TypeError(
-                    "environment info must "
-                    "be a mapping"
-                )
-
-            required_keys = {
-                "constraint_ids",
-                "constraint_costs",
-                "constraint_active_flags",
-            }
-
-            missing = (
-                required_keys
-                - set(
-                    reference_info
-                )
-            )
-
-            if missing:
-                raise KeyError(
-                    "environment info missing "
-                    f"constraint fields: {missing}"
-                )
-
-            info_constraint_ids = tuple(
-                reference_info[
-                    "constraint_ids"
-                ]
-            )
-
-            if (
-                info_constraint_ids
-                != self.constraint_ids
-            ):
-                raise ValueError(
-                    "environment constraint IDs "
-                    "do not match runner"
-                )
-
-            thread_costs = np.asarray(
-                reference_info[
-                    "constraint_costs"
-                ],
-                dtype=np.float32,
-            )
-
-            thread_active_flags = np.asarray(
-                reference_info[
-                    "constraint_active_flags"
-                ],
-                dtype=np.float32,
-            )
-
-            expected_shape = (
-                self.num_constraints,
-            )
-
-            if (
-                thread_costs.shape
-                != expected_shape
-            ):
-                raise ValueError(
-                    "constraint_costs has "
-                    "invalid shape"
-                )
-
-            if (
-                thread_active_flags.shape
-                != expected_shape
-            ):
-                raise ValueError(
-                    "constraint_active_flags "
-                    "has invalid shape"
-                )
-
-            if not np.all(
-                np.isfinite(
-                    thread_costs
-                )
-            ):
-                raise ValueError(
-                    "constraint_costs contains "
-                    "non-finite values"
-                )
-
-            if np.any(
-                thread_costs < 0.0
-            ):
-                raise ValueError(
-                    "constraint costs cannot "
-                    "be negative"
-                )
-
-            if not np.all(
-                (
-                    thread_active_flags
-                    == 0.0
-                )
-                | (
-                    thread_active_flags
-                    == 1.0
-                )
-            ):
-                raise ValueError(
-                    "constraint active flags "
-                    "must be binary"
-                )
-
-            costs[
-                thread_id
-            ] = thread_costs
-
-            active_flags[
-                thread_id
-            ] = thread_active_flags
-
-            for agent_id in range(
-                1,
-                self.num_agents,
-            ):
-                agent_info = (
-                    agent_infos[
-                        agent_id
-                    ]
-                )
-
-                if not isinstance(
-                    agent_info,
-                    Mapping,
-                ):
-                    raise TypeError(
-                        "environment info must "
-                        "be a mapping"
-                    )
-
-                if tuple(
-                    agent_info[
-                        "constraint_ids"
-                    ]
-                ) != self.constraint_ids:
-                    raise ValueError(
-                        "constraint IDs differ "
-                        "between agents"
-                    )
-
-                if not np.allclose(
-                    np.asarray(
-                        agent_info[
-                            "constraint_costs"
-                        ],
-                        dtype=np.float32,
-                    ),
-                    thread_costs,
-                ):
-                    raise ValueError(
-                        "constraint costs differ "
-                        "between agents"
-                    )
-
-                if not np.array_equal(
-                    np.asarray(
-                        agent_info[
-                            "constraint_active_flags"
-                        ],
-                        dtype=np.float32,
-                    ),
-                    thread_active_flags,
-                ):
-                    raise ValueError(
-                        "constraint active flags "
-                        "differ between agents"
-                    )
-
-        return (
-            costs,
-            active_flags,
-        )
+        fields = ("constraint_costs", "constraint_active_flags", "constraint_raw_violations")
+        matrices = [np.empty((num_threads, self.num_constraints), dtype=np.float32) for _ in fields]
+        for thread_id, agent_infos in enumerate(infos):
+            if len(agent_infos) != self.num_agents:
+                raise ValueError("infos must contain one dictionary per reservoir")
+            reference = None
+            for info in agent_infos:
+                if not isinstance(info, Mapping):
+                    raise TypeError("environment info must be a mapping")
+                if tuple(info["constraint_ids"]) != self.constraint_ids:
+                    raise ValueError("environment constraint IDs do not match runner")
+                vectors = [np.asarray(info[key], dtype=np.float32) for key in fields]
+                for key, vector in zip(fields, vectors):
+                    if vector.shape != (self.num_constraints,) or not np.isfinite(vector).all():
+                        raise ValueError(key + " has invalid shape or non-finite values")
+                costs, flags, raw = vectors
+                expected = self.constraint_buffer.prepare_training_costs(raw[None], flags[None])[0]
+                if (np.any(costs < 0.0) or np.any(costs[flags == 0.0] != 0.0)
+                        or not np.allclose(costs, expected, rtol=1e-6, atol=1e-7)):
+                    raise ValueError("environment cost disagrees with saved raw violation/active flag")
+                if reference is None:
+                    reference = vectors
+                elif any(not np.array_equal(a, b) for a, b in zip(reference, vectors)):
+                    raise ValueError("constraint feedback differs between agents")
+            for matrix, vector in zip(matrices, reference):
+                matrix[thread_id] = vector
+        return tuple(matrices)
 
     @staticmethod
     def _get_sampling_context(

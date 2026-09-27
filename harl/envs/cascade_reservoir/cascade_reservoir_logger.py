@@ -555,6 +555,18 @@ class CascadeReservoirLogger(BaseLogger):
                         "p2_total_violation": (
                             p2_violation
                         ),
+                        "p2_relaxation_fraction": self._optional_number(info, "p2_relaxation_fraction"),
+                        "p3_total_violation": self._optional_number(info, "p3_total_violation"),
+                        "p4_total_violation": self._optional_number(info, "p4_total_violation"),
+                        "p2_lower_violation_m": self._optional_number(info, "p2_lower_violation_m"),
+                        "p2_upper_violation_m": self._optional_number(info, "p2_upper_violation_m"),
+                        "p3_level_violation_m": self._optional_number(info, "p3_level_violation_m"),
+                        "p3_release_violation_m3s": self._optional_number(info, "p3_release_violation_m3s"),
+                        "p4_release_violation_m3s": self._optional_number(info, "p4_release_violation_m3s"),
+                        "p2_recovery_lower_level_m": self._optional_number(info, "p2_recovery_lower_level_m"),
+                        "p2_recovery_upper_level_m": self._optional_number(info, "p2_recovery_upper_level_m"),
+                        "p2_lower_relaxation_m": self._optional_number(info, "p2_lower_relaxation_m"),
+                        "p2_upper_relaxation_m": self._optional_number(info, "p2_upper_relaxation_m"),
                     }
                 )
 
@@ -705,6 +717,9 @@ class CascadeReservoirLogger(BaseLogger):
                     "p2_total_violation": (
                         p2_violation
                     ),
+                    "p2_relaxation_fraction": self._optional_number(first_info, "p2_relaxation_fraction"),
+                    "p3_total_violation": self._optional_number(first_info, "p3_total_violation"),
+                    "p4_total_violation": self._optional_number(first_info, "p4_total_violation"),
                     "done": int(
                         done_envs[
                             thread_id
@@ -1252,6 +1267,18 @@ class CascadeReservoirLogger(BaseLogger):
                     "p4_release_inflow_ratio",
                     "p3_relaxation_fraction",
                     "p2_total_violation",
+                    "p2_relaxation_fraction",
+                    "p3_total_violation",
+                    "p4_total_violation",
+                    "p2_lower_violation_m",
+                    "p2_upper_violation_m",
+                    "p3_level_violation_m",
+                    "p3_release_violation_m3s",
+                    "p4_release_violation_m3s",
+                    "p2_recovery_lower_level_m",
+                    "p2_recovery_upper_level_m",
+                    "p2_lower_relaxation_m",
+                    "p2_upper_relaxation_m",
                 ],
             )
         )
@@ -1277,6 +1304,9 @@ class CascadeReservoirLogger(BaseLogger):
                     "p4_release_inflow_ratio",
                     "p3_relaxation_fraction",
                     "p2_total_violation",
+                    "p2_relaxation_fraction",
+                    "p3_total_violation",
+                    "p4_total_violation",
                     "done",
                 ],
             )

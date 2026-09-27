@@ -36,6 +36,8 @@ class ConstraintBuffer:
         share_obs_space,
         constraint_ids: Sequence[str],
         budgets: Sequence[float],
+        normalizers: Sequence[float],
+        tolerances: Sequence[float],
     ):
         self.constraint_ids = (
             self._validate_constraint_ids(
@@ -53,6 +55,14 @@ class ConstraintBuffer:
                 self.num_constraints,
             )
         )
+
+        for name, values, positive in (("normalizers", normalizers, True),
+                                       ("tolerances", tolerances, False)):
+            values = np.asarray(values, dtype=np.float32)
+            if (values.shape != (self.num_constraints,) or not np.isfinite(values).all()
+                    or np.any(values <= 0.0 if positive else values < 0.0)):
+                raise ValueError("invalid constraint " + name)
+            setattr(self, name, self._readonly_copy(values))
 
         self._buffers = tuple(
             OnPolicyCriticBufferEP(
@@ -102,6 +112,22 @@ class ConstraintBuffer:
             ),
             dtype=np.float32,
         )
+
+        self.raw_violations = np.zeros_like(self.active_flags)
+
+    def prepare_training_costs(self, raw_violations, active_flags):
+        raw = self._prepare_constraint_matrix(raw_violations, "raw_violations")
+        flags = self._prepare_active_flags(active_flags)
+        if np.any(raw < 0.0):
+            raise ValueError("raw violations cannot be negative")
+        return flags * np.maximum(0.0, raw / self.normalizers - self.tolerances)
+
+    def rebuild_training_costs(self):
+        """Use saved xi/chi as the source of truth before computing GAE/returns."""
+        for t in range(self.episode_length):
+            costs = self.prepare_training_costs(self.raw_violations[t], self.active_flags[t])
+            for j, buffer in enumerate(self._buffers):
+                buffer.rewards[t, :, 0] = costs[:, j]
 
     @property
     def step(self) -> int:
@@ -208,6 +234,7 @@ class ConstraintBuffer:
         rnn_states_critic,
         value_preds,
         costs,
+        raw_violations,
         active_flags,
         masks,
         bad_masks,
@@ -253,6 +280,11 @@ class ConstraintBuffer:
             )
         )
 
+        raw_violations = self._prepare_constraint_matrix(raw_violations, "raw_violations")
+        expected_costs = self.prepare_training_costs(raw_violations, active_flags)
+        if not np.allclose(costs, expected_costs, rtol=1e-6, atol=1e-7):
+            raise ValueError("constraint cost disagrees with chi * max(0, xi/z - tolerance)")
+
         inactive_costs = costs[
             active_flags == 0.0
         ]
@@ -263,7 +295,7 @@ class ConstraintBuffer:
                 np.abs(
                     inactive_costs
                 )
-                > 1e-8
+                > 0.0
             )
         ):
             raise ValueError(
@@ -280,6 +312,9 @@ class ConstraintBuffer:
             bad_masks,
             "bad_masks",
         )
+
+        costs = expected_costs
+        self.raw_violations[current_step] = raw_violations
 
         self.active_flags[
             current_step
@@ -321,6 +356,8 @@ class ConstraintBuffer:
         next_values,
         value_normalizers=None,
     ) -> None:
+
+        self.rebuild_training_costs()
 
         next_values = (
             self._prepare_constraint_matrix(
@@ -474,8 +511,7 @@ class ConstraintBuffer:
         )
 
         weighted_cost_sums = np.sum(
-            weighted_active
-            * costs,
+            time_weights[:, np.newaxis, np.newaxis] * costs,
             axis=(0, 1),
         )
 
@@ -567,9 +603,10 @@ class ConstraintBuffer:
         for buffer in self._buffers:
             buffer.after_update()
 
-        self.active_flags.fill(
-            0.0
-        )
+        self.active_flags.fill(0.0)
+        self.raw_violations.fill(0.0)
+        for buffer in self._buffers:
+            buffer.rewards.fill(0.0)
 
         self._validate_synchronization()
 

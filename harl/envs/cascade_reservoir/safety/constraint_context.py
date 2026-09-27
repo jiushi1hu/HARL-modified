@@ -399,12 +399,28 @@ class P3Constraints:
 
 
 @dataclass(frozen=True)
+class P4Constraints:
+    """Active minimum release/inflow ratio; None in the context means inactive."""
+
+    release_inflow_ratio: float
+
+    def __post_init__(self):
+        object.__setattr__(self, "release_inflow_ratio", _nonnegative_finite(
+            self.release_inflow_ratio, "P4 release_inflow_ratio"))
+
+    def release_bounds(self, inflow_m3s: float) -> ReleaseBounds:
+        inflow = _nonnegative_finite(inflow_m3s, "P4 inflow_m3s")
+        return ReleaseBounds(min_release_m3s=self.release_inflow_ratio * inflow)
+
+
+@dataclass(frozen=True)
 class ConstraintContext:
     """Constraint set used by S201 local-feasibility evaluation."""
 
     p1: P1Constraints
     p2: Optional[P2Constraints] = None
     p3: Optional[P3Constraints] = None
+    p4: Optional[P4Constraints] = None
 
     def __post_init__(self):
         if not isinstance(
@@ -439,17 +455,21 @@ class ConstraintContext:
                 "P3Constraints or None"
             )
 
+        if self.p4 is not None and not isinstance(self.p4, P4Constraints):
+            raise TypeError("p4 must be P4Constraints or None")
+
     def resolve(
         self,
+        *, inflow_m3s: Optional[float] = None,
     ) -> "EffectiveS201Bounds":
         return resolve_s201_bounds(
-            self
+            self, inflow_m3s=inflow_m3s
         )
 
 
 @dataclass(frozen=True)
 class EffectiveS201Bounds:
-    """Intersection of the currently active P1/P2/P3 constraints."""
+    """Intersection of the currently active P1/P2/P3/P4 constraints."""
 
     level: LevelBounds
     release: ReleaseBounds
@@ -544,12 +564,14 @@ def resolve_s201_bounds(
     context_or_p1,
     p2: Optional[P2Constraints] = None,
     p3: Optional[P3Constraints] = None,
+    p4: Optional[P4Constraints] = None,
+    *, inflow_m3s: Optional[float] = None,
 ) -> EffectiveS201Bounds:
     """Resolve the effective S201 bounds.
 
     Supported forms:
 
-        resolve_s201_bounds(context)
+        resolve_s201_bounds(context, inflow_m3s=current_candidate_inflow)
 
     or:
 
@@ -557,8 +579,11 @@ def resolve_s201_bounds(
             p1,
             p2,
             p3,
+            p4,
+            inflow_m3s=current_candidate_inflow,
         )
 
+    Inflow is required when P4 is active, and may be omitted otherwise.
     The function only intersects currently active constraints.
     It never relaxes any constraint.
     """
@@ -570,16 +595,18 @@ def resolve_s201_bounds(
         if (
             p2 is not None
             or p3 is not None
+            or p4 is not None
         ):
             raise ValueError(
                 "when ConstraintContext is supplied, "
-                "p2 and p3 must not be supplied "
+                "p2, p3 and p4 must not be supplied "
                 "separately"
             )
 
         p1 = context_or_p1.p1
         p2 = context_or_p1.p2
         p3 = context_or_p1.p3
+        p4 = context_or_p1.p4
 
     elif isinstance(
         context_or_p1,
@@ -618,6 +645,9 @@ def resolve_s201_bounds(
             "P1Constraints"
         )
 
+    if p4 is not None and not isinstance(p4, P4Constraints):
+        raise TypeError("p4 must be P4Constraints or None")
+
     effective_level = (
         p1.level
     )
@@ -647,6 +677,11 @@ def resolve_s201_bounds(
                     p3.release
                 )
             )
+
+    if p4 is not None:
+        if inflow_m3s is None:
+            raise ValueError("active P4 requires the current candidate inflow_m3s")
+        effective_release = effective_release.intersect(p4.release_bounds(inflow_m3s))
 
     return EffectiveS201Bounds(
         level=effective_level,

@@ -782,6 +782,8 @@ class CascadeReservoirEnv:
 
         self.s3_solver = (
             S3RelaxationSolver(
+                p2_config=dict(safety["p2"]),
+                fallback_config=dict(safety["fallback"]),
                 reservoir_order=(
                     self.reservoir_order
                 ),
@@ -2660,11 +2662,6 @@ class CascadeReservoirEnv:
             .p3_relaxation_fraction
         )
 
-        p2_violation = float(
-            safety_result
-            .p2_total_violation
-        )
-
         forced_joint_action = (
             None
             if (
@@ -2718,6 +2715,35 @@ class CascadeReservoirEnv:
         )
 
         infos = []
+
+        # Evaluate the executed path against original, unrelaxed bounds before
+        # advancing storage/history. Keep physical-unit violations in diagnostics.
+        operational = {}
+        p2_recovery = {}
+        totals = np.zeros(3, dtype=np.float64)
+        for index, reservoir_id in enumerate(self.reservoir_order):
+            state = ReservoirSafetyState(
+                reservoir_id=reservoir_id, physics=self.physics[reservoir_id],
+                mapper=self.action_mappers[reservoir_id], storage_m3=self.storage_m3[reservoir_id],
+                forcing_inflow_m3s=(actual_inflows[reservoir_id] if index == 0
+                                   else interval_inflows[reservoir_id]),
+                previous_release_m3s=self.previous_release_m3s[reservoir_id],
+                p1=self.p1_constraints[reservoir_id],
+                p2=self._get_p2_constraints(reservoir_id, operation_stage),
+            )
+            raw, scores = self.s3_solver.operational_violation_components(
+                state, transitions[reservoir_id].next_level_m, executed_releases[reservoir_id],
+                actual_inflows[reservoir_id], operation_stage == "dry_supply",
+            )
+            operational[reservoir_id] = raw
+            bounds = safety_result.effective_p2_bounds[index]
+            p2_recovery[reservoir_id] = {
+                "p2_recovery_lower_level_m": bounds.min_level_m,
+                "p2_recovery_upper_level_m": bounds.max_level_m,
+                "p2_lower_relaxation_m": state.p2.level.min_level_m - bounds.min_level_m,
+                "p2_upper_relaxation_m": bounds.max_level_m - state.p2.level.max_level_m,
+            }
+            totals += scores
 
         for reservoir_id in (
             self.reservoir_order
@@ -2817,8 +2843,17 @@ class CascadeReservoirEnv:
                         p3_fraction
                     ),
                     "p2_total_violation": (
-                        p2_violation
+                        float(totals[0])
                     ),
+                    "p3_total_violation": float(totals[1]),
+                    "p4_total_violation": float(totals[2]),
+                    "p2_relaxation_fraction": safety_result.p2_relaxation_fraction,
+                    "p2_lower_violation_m": float(operational[reservoir_id][0]),
+                    "p2_upper_violation_m": float(operational[reservoir_id][1]),
+                    "p3_level_violation_m": float(operational[reservoir_id][2]),
+                    "p3_release_violation_m3s": float(operational[reservoir_id][3]),
+                    "p4_release_violation_m3s": float(operational[reservoir_id][4]),
+                    **p2_recovery[reservoir_id],
                     "forced_joint_action": (
                         forced_joint_action
                     ),

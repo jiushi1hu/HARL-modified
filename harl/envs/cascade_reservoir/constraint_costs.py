@@ -70,6 +70,9 @@ class ConstraintSpec:
             "scale_coefficient",
         )
 
+        if scale_coefficient != 1.0:
+            raise ValueError("beta/scale_coefficient must equal 1 under the revised raw-violation formula")
+
         normalizer = _validate_positive(
             self.normalizer,
             "normalizer",
@@ -462,12 +465,7 @@ class ConstraintCostEvaluator:
                 operation_stage
             )
 
-            if not active:
-                continue
-
-            active_flags[
-                index
-            ] = 1.0
+            active_flags[index] = float(active)
 
             actual_value = (
                 self._get_actual_value(
@@ -488,9 +486,6 @@ class ConstraintCostEvaluator:
                     ),
                     actual_value=(
                         actual_value
-                    ),
-                    scale_coefficient=(
-                        spec.scale_coefficient
                     ),
                 )
             )
@@ -518,7 +513,7 @@ class ConstraintCostEvaluator:
 
             costs[
                 index
-            ] = cost
+            ] = float(active) * cost
 
         raw_violations.setflags(
             write=False
@@ -626,7 +621,6 @@ class ConstraintCostEvaluator:
     def _compute_raw_violation(
         requirement: float,
         actual_value: float,
-        scale_coefficient: float,
     ) -> float:
 
         relative_shortfall = max(
@@ -639,8 +633,7 @@ class ConstraintCostEvaluator:
         )
 
         return float(
-            scale_coefficient
-            * math_sqrt(
+            math_sqrt(
                 relative_shortfall
             )
         )
