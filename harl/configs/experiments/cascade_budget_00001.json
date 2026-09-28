@@ -1,0 +1,234 @@
+{
+  "algo_args": {
+    "algo": {
+      "action_aggregation": "prod",
+      "actor_num_mini_batch": 1,
+      "clip_param": 0.2,
+      "critic_epoch": 5,
+      "critic_num_mini_batch": 1,
+      "entropy_coef": 0.01,
+      "fixed_order": false,
+      "gae_lambda": 0.95,
+      "gamma": 0.99,
+      "huber_delta": 10.0,
+      "max_grad_norm": 10.0,
+      "ppo_epoch": 5,
+      "share_param": false,
+      "use_clipped_value_loss": true,
+      "use_gae": true,
+      "use_huber_loss": true,
+      "use_max_grad_norm": true,
+      "use_policy_active_masks": true,
+      "value_loss_coef": 1
+    },
+    "device": {
+      "cuda": false,
+      "cuda_deterministic": true,
+      "torch_threads": 4
+    },
+    "eval": {
+      "eval_episodes": 1,
+      "n_eval_rollout_threads": 1,
+      "use_eval": false
+    },
+    "logger": {
+      "log_dir": "./results"
+    },
+    "model": {
+      "activation_func": "relu",
+      "critic_lr": 0.0005,
+      "data_chunk_length": 10,
+      "gain": 0.01,
+      "hidden_sizes": [
+        128,
+        128
+      ],
+      "initialization_method": "orthogonal_",
+      "lr": 0.0005,
+      "opti_eps": 1e-05,
+      "recurrent_n": 1,
+      "std_x_coef": 1,
+      "std_y_coef": 0.5,
+      "use_feature_normalization": true,
+      "use_naive_recurrent_policy": false,
+      "use_recurrent_policy": false,
+      "weight_decay": 0
+    },
+    "render": {
+      "render_episodes": 10,
+      "use_render": false
+    },
+    "seed": {
+      "seed": 1,
+      "seed_specify": true
+    },
+    "train": {
+      "episode_length": 1096,
+      "eval_interval": 50,
+      "log_interval": 1,
+      "model_dir": null,
+      "n_rollout_threads": 1,
+      "num_env_steps": 39456,
+      "save_interval": 1,
+      "use_linear_lr_decay": false,
+      "use_proper_time_limits": true,
+      "use_valuenorm": true
+    }
+  },
+  "env_args": {
+    "action": {
+      "num_actions": 201
+    },
+    "data": {
+      "daily_inflow": "timeseries/daily_inflow.csv",
+      "initial_state": "initialization/initial_state.csv",
+      "level_storage_anchors": "static/level_storage_anchors.csv",
+      "reservoir_physics": "static/reservoir_physics.csv",
+      "root": "data/cascade_reservoir",
+      "water_level_limits": "constraints/water_level_limits.csv"
+    },
+    "hydropower": {
+      "efficiency": 0.94
+    },
+    "lagrangian": {
+      "initial_value": 0.0,
+      "learning_rate": 0.05
+    },
+    "level_control": {
+      "dry_supply": "normal_upper_level_m",
+      "flood_control": "flood_limit_level_m",
+      "high_level": "normal_upper_level_m",
+      "storage": "normal_upper_level_m"
+    },
+    "long_term_constraints": [
+      {
+        "beta": 1.0,
+        "budget": 0.0001,
+        "normalizer": 1.0,
+        "requirement": 1200.0,
+        "reservoir_id": "WDD",
+        "tolerance": 0.0,
+        "type": "eco_release"
+      },
+      {
+        "beta": 1.0,
+        "budget": 0.0001,
+        "normalizer": 1.0,
+        "requirement": 1200.0,
+        "reservoir_id": "BHT",
+        "tolerance": 0.0,
+        "type": "eco_release"
+      },
+      {
+        "beta": 1.0,
+        "budget": 0.0001,
+        "normalizer": 1.0,
+        "requirement": 1200.0,
+        "reservoir_id": "XLD",
+        "tolerance": 0.0,
+        "type": "eco_release"
+      },
+      {
+        "beta": 1.0,
+        "budget": 0.0001,
+        "normalizer": 1.0,
+        "requirement": 1700.0,
+        "reservoir_id": "XJB",
+        "tolerance": 0.0,
+        "type": "eco_release"
+      },
+      {
+        "beta": 1.0,
+        "budget": 0.0001,
+        "normalizer": 1.0,
+        "requirement": 6000.0,
+        "reservoir_id": "THR",
+        "tolerance": 0.0,
+        "type": "eco_release"
+      }
+    ],
+    "operation_stage": {
+      "dry_supply": [
+        "01-01",
+        "05-31"
+      ],
+      "flood_control": [
+        "06-01",
+        "09-30"
+      ],
+      "high_level": [
+        "12-01",
+        "12-31"
+      ],
+      "storage": [
+        "10-01",
+        "11-30"
+      ]
+    },
+    "reservoir_order": [
+      "WDD",
+      "BHT",
+      "XLD",
+      "XJB",
+      "THR"
+    ],
+    "safety": {
+      "fallback": {
+        "comparison": "lexicographic_p2_p3_p4",
+        "p2_normalization": "p1_level_span",
+        "p3_normalization": "normal_change_limits",
+        "p4_normalization": "normal_required_release",
+        "reference": "normal_bounds",
+        "tie_break": "joint_action_lexicographic"
+      },
+      "p2": {
+        "max_lower_relaxation_m": {
+          "BHT": 0.0,
+          "THR": 0.0,
+          "WDD": 0.0,
+          "XJB": 0.0,
+          "XLD": 0.0
+        },
+        "max_upper_relaxation_m": {
+          "BHT": 0.2,
+          "THR": 0.2,
+          "WDD": 0.2,
+          "XJB": 0.2,
+          "XLD": 0.2
+        }
+      },
+      "p3": {
+        "level_change_limit_m": {
+          "BHT": 0.5,
+          "THR": 1.4,
+          "WDD": 0.3,
+          "XJB": 0.2,
+          "XLD": 0.9
+        },
+        "max_relaxation_factor": 2.0,
+        "release_change_floor_m3s": 5000.0,
+        "release_change_ratio": 0.5
+      },
+      "p4": {
+        "min_release_inflow_ratio": 0.75,
+        "normal_release_inflow_ratio": 1.0
+      },
+      "relaxation": {
+        "max_iterations": 16,
+        "tolerance": 0.001
+      }
+    },
+    "simulation": {
+      "end_date": "2025-12-31",
+      "start_date": "2023-01-01",
+      "timestep_seconds": 86400
+    },
+    "state_type": "EP"
+  },
+  "main_args": {
+    "algo": "happo",
+    "env": "cascade_reservoir",
+    "exp_name": "full_episode_36_budget_00001",
+    "load_config": "harl/configs/experiments/cascade_budget_00001.json"
+  }
+}

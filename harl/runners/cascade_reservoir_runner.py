@@ -31,6 +31,32 @@ from harl.utils.trans_tools import _t2n
 from harl.utils.configs_tools import save_config
 
 
+def summarize_lagrangian_advantages(reward, constraints, multipliers, constraint_ids):
+    """Read-only pre-update scales; these are advantages, not policy gradients."""
+    reward = np.asarray(reward, dtype=np.float64)
+    weighted = np.asarray(constraints, dtype=np.float64) * np.asarray(multipliers)
+    penalty = weighted.sum(axis=-1, keepdims=True)
+    combined = reward - penalty
+
+    def rms(x):
+        return float(np.sqrt(np.mean(np.square(x))))
+
+    info = {"advantage/reward_rms": rms(reward),
+            "advantage/penalty_rms": rms(penalty),
+            "advantage/combined_rms": rms(combined),
+            "advantage/reward_std": float(np.std(reward)),
+            "advantage/penalty_std": float(np.std(penalty)),
+            "advantage/sign_flip_fraction": float(np.mean(reward * combined < 0))}
+    # Undefined ratios are omitted rather than manufactured with an epsilon.
+    if info["advantage/reward_rms"] > 0:
+        info["advantage/penalty_to_reward_rms"] = rms(penalty) / rms(reward)
+    for j, cid in enumerate(constraint_ids):
+        info[f"advantage/constraint_rms/{cid}"] = rms(constraints[..., j])
+        info[f"advantage/weighted_constraint_rms/{cid}"] = rms(weighted[..., j])
+        info[f"advantage/lambda_snapshot/{cid}"] = float(multipliers[j])
+    return info
+
+
 _RESERVOIR_ORDER = (
     "WDD",
     "BHT",
@@ -1158,6 +1184,8 @@ class CascadeReservoirRunner(OnPolicyHARunner):
         # Freeze A_L using rollout values and pre-update normalizers above.
         # Critics may update their normalizers; never recompute this batch's
         # Actor advantages after these updates.
+        advantage_diagnostics = summarize_lagrangian_advantages(
+            reward_advantages, constraint_advantages, lambda_snapshot, self.constraint_ids)
         reward_critic_train_info = (
             self.critic.train(
                 self.critic_buffer,
@@ -1358,6 +1386,7 @@ class CascadeReservoirRunner(OnPolicyHARunner):
         critic_train_info = dict(
             reward_critic_train_info
         )
+        critic_train_info.update(advantage_diagnostics)
 
         for key, value in (
             constraint_critic_train_info

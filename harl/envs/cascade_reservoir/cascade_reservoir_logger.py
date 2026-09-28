@@ -1113,9 +1113,16 @@ class CascadeReservoirLogger(BaseLogger):
                 f" | gap={number(gap)} | active={active}/{total}"
                 f" | violation_samples={sum(c > 0 for c in costs)}"
                 f" | critic_loss={number(loss)}"
+                f" | A_C_rms={number(critic_train_info.get(f'advantage/constraint_rms/{cid}'))}"
+                f" | lambda_A_C_rms={number(critic_train_info.get(f'advantage/weighted_constraint_rms/{cid}'))}"
                 + (" | inactive: lambda unchanged" if not active else "")
             )
         print(f"Reward Critic: value_loss={number(critic_train_info.get('value_loss'))}")
+        print("Pre-update advantages (using lambda_snapshot):"
+              f" A_R_rms={number(critic_train_info.get('advantage/reward_rms'))}"
+              f" | sum_lambda_A_C_rms={number(critic_train_info.get('advantage/penalty_rms'))}"
+              f" | penalty/reward={number(critic_train_info.get('advantage/penalty_to_reward_rms'))}"
+              f" | sign_flip_fraction={number(critic_train_info.get('advantage/sign_flip_fraction'))}")
         for rid, info in zip(self.reservoir_order, actor_train_infos):
             print(f"  Actor {rid}: policy_loss={number(info.get('policy_loss'))}"
                   f" | entropy={number(info.get('dist_entropy'))}"
