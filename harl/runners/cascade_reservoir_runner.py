@@ -1372,6 +1372,9 @@ class CascadeReservoirRunner(OnPolicyHARunner):
         ) in enumerate(
             self.constraint_ids
         ):
+            critic_train_info[f"lambda_before/{constraint_id}"] = float(
+                lagrangian_update.old_multipliers[constraint_index]
+            )
             critic_train_info[
                 f"lambda/{constraint_id}"
             ] = float(

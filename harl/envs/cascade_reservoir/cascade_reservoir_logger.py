@@ -233,6 +233,7 @@ class CascadeReservoirLogger(BaseLogger):
         )
 
         self._print_cascade_summary()
+        self._print_training_details(actor_train_infos, critic_train_info)
 
         self._flush_files()
 
@@ -954,6 +955,10 @@ class CascadeReservoirLogger(BaseLogger):
 
             if active > 0.0:
                 self._append_metric(
+                    metric_store, f"constraint/{constraint_id}/xi",
+                    raw_violations[index],
+                )
+                self._append_metric(
                     metric_store,
                     (
                         f"constraint/"
@@ -1082,6 +1087,40 @@ class CascadeReservoirLogger(BaseLogger):
                 f"mean P2 violation = "
                 f"{np.nanmean(p2_values):.6f}."
             )
+
+    def _print_training_details(self, actor_train_infos, critic_train_info):
+        """Display the current batch; inactive constraints have no cost mean."""
+        def number(value):
+            return f"{float(value):.6g}" if value is not None and np.isfinite(float(value)) else "N/A"
+
+        total = len(self._rollout_metrics.get("system/reward", []))
+        print("Layer 2: cost_discounted=用于更新lambda; cost_mean/xi_mean=生效样本等权均值")
+        for cid in self.constraint_ids:
+            costs = self._rollout_metrics.get(f"constraint/{cid}/cost", [])
+            raw = self._rollout_metrics.get(f"constraint/{cid}/xi", [])
+            active = len(costs)
+            discounted = critic_train_info.get(f"mean_cost/{cid}") if active else None
+            gap = critic_train_info.get(f"budget_gap/{cid}") if active else None
+            old = critic_train_info.get(f"lambda_before/{cid}")
+            new = critic_train_info.get(f"lambda/{cid}")
+            loss = critic_train_info.get(f"constraint_critic/{cid}/value_loss")
+            print(
+                f"  {cid}: lambda={number(old)} -> {number(new)}"
+                f" | cost_discounted={number(discounted)}"
+                f" | cost_mean={number(np.mean(costs) if active else None)}"
+                f" | xi_mean={number(np.mean(raw) if raw else None)}"
+                f" | budget={number(critic_train_info.get(f'budget/{cid}'))}"
+                f" | gap={number(gap)} | active={active}/{total}"
+                f" | violation_samples={sum(c > 0 for c in costs)}"
+                f" | critic_loss={number(loss)}"
+                + (" | inactive: lambda unchanged" if not active else "")
+            )
+        print(f"Reward Critic: value_loss={number(critic_train_info.get('value_loss'))}")
+        for rid, info in zip(self.reservoir_order, actor_train_infos):
+            print(f"  Actor {rid}: policy_loss={number(info.get('policy_loss'))}"
+                  f" | entropy={number(info.get('dist_entropy'))}"
+                  f" | mean_ratio={number(info.get('ratio'))}")
+        print(flush=True)
 
     def _step_metadata(
         self,

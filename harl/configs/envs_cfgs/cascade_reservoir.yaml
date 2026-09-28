@@ -101,6 +101,8 @@ safety: #这一部分就是第一层layer 1
 
 
 long_term_constraints: #Layer 2
+  # 用户授权的预算敏感性实验（2026-09-28）：五库预算由 0.02 降至 0.01。
+  # 此值为暂定实验阈值，不代表已有工程依据；实际 cost 仍由运行结果计算。
 
   - reservoir_id: WDD
     type: "eco_release" #表示约束类型是生态下泄，检查乌东德下泄是否满足生态要求
@@ -108,7 +110,7 @@ long_term_constraints: #Layer 2
     beta: 1.0 #兼容旧配置，仅允许1；修订版原始违反公式不乘额外beta
     normalizer: 1.0 #这是违反cost的归一化参数，1意味着没有通过这个参数进行额外数量级缩放
     tolerance: 0.0 #意味着没有额外的“允许少一点也算满足”的宽容区间
-    budget: 0.02 #它是长期约束cost的允许预算，也就是这条长期约束允许的cost水平是0.02
+    budget: 0.01 #长期约束折扣 cost 的允许预算，用于 lambda 更新比较
 
   - reservoir_id: BHT
     type: "eco_release"
@@ -116,7 +118,7 @@ long_term_constraints: #Layer 2
     beta: 1.0
     normalizer: 1.0
     tolerance: 0.0
-    budget: 0.02
+    budget: 0.01
 
   - reservoir_id: XLD
     type: "eco_release"
@@ -124,7 +126,7 @@ long_term_constraints: #Layer 2
     beta: 1.0
     normalizer: 1.0
     tolerance: 0.0
-    budget: 0.02
+    budget: 0.01
 
   - reservoir_id: XJB
     type: "eco_release"
@@ -132,7 +134,7 @@ long_term_constraints: #Layer 2
     beta: 1.0
     normalizer: 1.0
     tolerance: 0.0
-    budget: 0.02
+    budget: 0.01
 
   - reservoir_id: THR
     type: "eco_release"
@@ -140,7 +142,7 @@ long_term_constraints: #Layer 2
     beta: 1.0
     normalizer: 1.0
     tolerance: 0.0
-    budget: 0.02
+    budget: 0.01
 
 
 lagrangian:
