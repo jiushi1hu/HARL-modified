@@ -35,7 +35,7 @@ export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
 - `examples/`：训练入口与水库测试。
 - `docs/`：研究方法和代码说明。
 
-修改研究代码前阅读 `AGENTS.md` 和 `docs/论文与代码统一上下文.md`。
+修改研究代码前阅读 `AGENTS.md` 和 `docs/论文与代码统一上下文_严谨修订版.md`。
 严谨修订版与现有实现的差异需单独处理；本次目录清理没有改变算法语义。
 
 ## 按顺序验证
@@ -49,7 +49,7 @@ python -m unittest examples.test_cascade_training_order
 
 前两项覆盖 Step 1～3，集成测试覆盖 Step 4～7 和模型保存/恢复。
 测试使用临时输出目录；原训练结果、模型和日志保留。
-清理范围及保留理由见 [仓库清理记录](docs/仓库清理记录.md)。
+历史清理记录已从 `docs/` 移除；当前规范和仍在使用的实验依据保留在 `docs/` 中。
 
 ## 上游来源与引用
 

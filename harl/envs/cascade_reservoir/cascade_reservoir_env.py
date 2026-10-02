@@ -57,21 +57,22 @@ _INFLOW_COLUMNS = {
     "THR": "THR_interval_inflow_m3s",
 }
 
-_BASE_OBS_DIM = 17
-_DOWNSTREAM_DECISION_OBS_DIM = 18
+_BASE_OBS_DIM = 17 #基础观测空间维度是 17 维
+_DOWNSTREAM_DECISION_OBS_DIM = 18 #对于下游四座水库，在真正进行顺序决策时使用的 observation 是 18 维 也就是说，基础观测是17维，但下游水库真正决策时维度是18维
 _SHARE_OBS_DIM = (
     len(_RESERVOIR_ORDER)
     * _BASE_OBS_DIM
-)
+) #这里的 len(_RESERVOIR_ORDER) 其实等于 5 ，因为 _RESERVOIR_ORDER 有五座水库 整体也就是 5*17=85 把五座水库各自的 17 维基础观测拼接到一起
 
-_SECONDS_PER_HOUR = 3600.0
+_SECONDS_PER_HOUR = 3600.0 #一小时有 3600 秒
 
 _FLOW_TOLERANCE_M3S = 1e-6
 _LEVEL_TOLERANCE_M = 1e-5
-_STORAGE_TOLERANCE_M3 = 1.0
+_STORAGE_TOLERANCE_M3 = 1.0 #库容检查允许 1 立方米的数值误差。
+#这三个值是容差，程序允许一个极小的误差范围
 
 
-class CascadeReservoirEnv:
+class CascadeReservoirEnv: #定义一个Python类：梯级水库环境
     """Five-reservoir cascade scheduling environment.
 
     Hydraulic order:
@@ -86,7 +87,9 @@ class CascadeReservoirEnv:
 
     step() executes the already selected joint action and
     advances the physical reservoir states.
-    """
+    """ #""" ""是文档字符串 这段话的意思是：这是一个五座梯级水库联合调度的强化学习环境。五座水库按照 WDD → BHT → XLD → XJB → THR 的水力顺序连接。
+    #每个时间步开始时，prepare_step() 先根据当前水库状态、来水和安全约束准备 S1-S3 决策；然后外部的 SequentialSampler 按照从上游到下游的顺序，让五座水库的策略依次选择动作；
+    # 当五座水库的联合动作全部确定以后，step() 才真正执行这些动作，计算各库的入流、下泄、库容、水位和发电状态，并把整个系统推进到下一个时间步。
 
     def __init__(
         self,
@@ -102,12 +105,12 @@ class CascadeReservoirEnv:
 
         self.env_args = dict(
             env_args
-        )
+        ) #上面这部分作用是：检查环境配置是否合法，把配置保存下来，然后从配置中读取并标准化五座水库的顺序
 
         self.reservoir_order = tuple(
             str(
                 reservoir_id
-            )
+            ) #把水库顺序保存到 self.reservoir_order 并最终转换成元组
             for reservoir_id
             in self.env_args[
                 "reservoir_order"
@@ -117,7 +120,7 @@ class CascadeReservoirEnv:
         if (
             self.reservoir_order
             != _RESERVOIR_ORDER
-        ):
+        ): #检查配置中的水库顺序，是否和程序预先规定的完全一致
             raise ValueError(
                 "reservoir_order must be "
                 "WDD, BHT, XLD, XJB, THR"
@@ -139,6 +142,7 @@ class CascadeReservoirEnv:
                 "state_type = EP"
             )
 
+        #把 CascadeReservoirEnv 正式运行前需要的所有组件依次准备好
         self._load_simulation_config()
         self._load_data()
         self._build_physics_metadata()
@@ -150,23 +154,23 @@ class CascadeReservoirEnv:
 
         self._rng = (
             np.random.default_rng()
-        )
+        ) #创建一个 NumPy 随机数生成器，保存到 self._rng 中
 
-        self._date_index = 0
-        self._terminated = False
+        self._date_index = 0 #把当前日期索引设为 0
+        self._terminated = False #表示当前 episode 还没有结束，后面运行到最后一天时会变成 True
 
-        self.storage_m3 = {}
-        self.previous_action = {}
-        self.previous_release_m3s = {}
-        self.previous_power_mw = {}
+        self.storage_m3 = {} #先建立一个空字典，用来保存五座水库当前库容
+        self.previous_action = {} #用来保存每座水库上一时间步的动作编号
+        self.previous_release_m3s = {} #用来保存每座水库上一时间步实际下泄流量
+        self.previous_power_mw = {} #用来保存每座水库上一时间步的发电功率
 
-        self._prepared_context = None
+        self._prepared_context = None #表示目前还没有调用 prepare_step() 生成当前时间步的决策，也就是说当前还没有准备好的 S1-S3 安全决策信息
 
         self.reset()
 
     def _load_simulation_config(
         self,
-    ) -> None:
+    ) -> None: #从配置中读取仿真开始日期和结束日期，并把它们转换成 Python 的 date 对象
         simulation = self.env_args[
             "simulation"
         ]
@@ -215,7 +219,7 @@ class CascadeReservoirEnv:
         self.timestep_hours = (
             self.timestep_seconds
             / _SECONDS_PER_HOUR
-        )
+        ) #把秒换算成小时 这里的 _SECONDS_PER_HOUR 就是前面定义的等于3600
 
         self.operation_stage_config = (
             dict(
@@ -223,7 +227,7 @@ class CascadeReservoirEnv:
                     "operation_stage"
                 ]
             )
-        )
+        ) #从环境配置中读取“不同运行阶段对应的日期范围”，转换成字典，并保存下来供后面判断当前属于哪个运行阶段
 
         self.level_control_config = (
             dict(
@@ -231,9 +235,10 @@ class CascadeReservoirEnv:
                     "level_control"
                 ]
             )
-        )
+        ) #保存了“不同运行阶段该采用哪种水位控制标准”的配置
 
-        if not self.operation_stage_config:
+        #下面两段是在做非空检查
+        if not self.operation_stage_config: #这行代码意思是 检查self.operation_stage_config是不是空的，如果是空的 {} ，那么 not {} 结果就是True，否则报错
             raise ValueError(
                 "operation_stage "
                 "cannot be empty"
@@ -245,6 +250,7 @@ class CascadeReservoirEnv:
                 "cannot be empty"
             )
 
+    #这段代码是创建数据加载器
     def _load_data(
         self,
     ) -> None:
@@ -252,27 +258,27 @@ class CascadeReservoirEnv:
             CascadeDataLoader(
                 self.env_args
             )
-        )
+        ) #创建一个 CascadeDataLoader 对象，并把整个环境配置：self.env_args 传进去
 
         required_attributes = (
             "physics",
             "daily_inflow",
             "initial_storage_m3",
             "level_limits",
-        )
+        ) #这里定义了一个元组，列出了 CascadeDataLoader 必须提供的 4 类数据
 
-        for attribute in (
+        for attribute in ( #这里开始一个 for 循环，也就是把所有数据拿出来一个一个检查 attribute表示属性的意思 后面每循环一次，attribute 就代表一个属性名称
             required_attributes
         ):
             if not hasattr(
                 self.data_loader,
                 attribute,
-            ):
+            ): #hasattr的作用是检查某个对象有没有名称的属性
                 raise AttributeError(
                     "CascadeDataLoader "
                     "must expose "
                     f"`{attribute}`"
-                )
+                ) #这段代码是在逐个检查 CascadeDataLoader 是否真的提供了前面要求的那 4 个属性
 
         self.physics = dict(
             self.data_loader.physics
@@ -281,10 +287,10 @@ class CascadeReservoirEnv:
         if (
             set(
                 self.physics
-            )
+            ) #如果对一个字典直接使用 set()，得到的是这个字典的所有 键
             != set(
                 self.reservoir_order
-            )
+            ) #检查 physics 中的水库名称，是否和环境规定的五座水库完全一致
         ):
             raise ValueError(
                 "physics data must contain "
@@ -299,23 +305,23 @@ class CascadeReservoirEnv:
             ]
             for reservoir_id
             in self.reservoir_order
-        }
+        } #根据当前的 reservoir_id，从原来的 self.physics 中取出对应水库的物理对象 这部分也就是 不改变每座水库的物理模型，只按照规定的梯级顺序重新排列 self.physics 字典
 
         self.daily_inflow = (
             self._prepare_daily_inflow(
                 self.data_loader
                 .daily_inflow
             )
-        )
+        ) #从 data_loader 中取出原始的每日来水数据，交给 _prepare_daily_inflow() 做整理和校验，然后保存到 self.daily_inflow
 
-        self.initial_storage_m3 = {
+        self.initial_storage_m3 = { # 表示要创建一个新的字典，并把它保存到： self.initial_storage_m3 这个字典专门用来存每座水库的初始库容
             reservoir_id:
             self._get_initial_storage(
                 reservoir_id
             )
-            for reservoir_id
+            for reservoir_id #开始循环
             in self.reservoir_order
-        }
+        } #按照五座水库的顺序，逐个读取每座水库的初始库容，并组成一个字典保存到 self.initial_storage_m 也就是说：依次获取五座水库的初始库容，并整理成 {水库编号: 初始库容} 的字典
 
         self.level_limits = {
             reservoir_id:
@@ -343,7 +349,7 @@ class CascadeReservoirEnv:
             inflow_data.copy()
         )
 
-        if "date" in frame.columns:
+        if "date" in frame.columns: #检查 frame 这个表格里面有没有叫 "date" 的列
             frame[
                 "date"
             ] = pd.to_datetime(
@@ -355,7 +361,7 @@ class CascadeReservoirEnv:
 
             frame = frame.set_index(
                 "date"
-            )
+            ) #把原始来水表中的日期列转换成标准时间格式，并作为 DataFrame 的索引，方便后续按日期进行水库仿真
 
         elif not isinstance(
             frame.index,
@@ -367,7 +373,7 @@ class CascadeReservoirEnv:
                 "or DatetimeIndex"
             )
 
-        frame.index = (
+        frame.index = ( #把现有的 index 强制转换成标准日期格式
             pd.DatetimeIndex(
                 pd.to_datetime(
                     frame.index,
@@ -631,6 +637,7 @@ class CascadeReservoirEnv:
                 )
             )
 
+            #下面的这部分作用是 把前面计算出来的每座水库的关键物理参数，按照水库编号保存到对应的字典里面，方便后面的仿真过程调用
             self.hard_min_level_m[
                 reservoir_id
             ] = hard_min
@@ -681,7 +688,7 @@ class CascadeReservoirEnv:
 
     def _build_action_mappers(
         self,
-    ) -> None:
+    ) -> None: #读取动作空间的数量配置，并检查这个数量是否合法
         num_actions = (
             self.env_args[
                 "action"
@@ -716,7 +723,7 @@ class CascadeReservoirEnv:
             raise ValueError(
                 "action.num_actions "
                 "must be at least 2"
-            )
+            ) # 检查动作数量是否至少有2个。如果只有1个动作，说明水库没有可选择的调度策略，程序认为这种配置无效
 
         self.action_mappers = {
             reservoir_id:
@@ -737,31 +744,31 @@ class CascadeReservoirEnv:
             )
             for reservoir_id
             in self.reservoir_order
-        }
+        } #为五座水库分别创建一个“动作映射器（ReleaseActionMapper）”，用于把强化学习输出的离散动作编号转换成实际的下泄流量。
 
     def _build_constraints(
         self,
-    ) -> None:
+    ) -> None: #为每一座水库建立 P1 级安全约束（硬约束），规定水位和下泄流量的合法范围
         self.p1_constraints = {
             reservoir_id:
             P1Constraints(
-                level=LevelBounds(
-                    min_level_m=(
+                level=LevelBounds( #level 水位约束：最低最高水位限制 创建水位边界
+                    min_level_m=( #最低运行水位
                         self
                         .hard_min_level_m[
                             reservoir_id
                         ]
                     ),
-                    max_level_m=(
+                    max_level_m=( #最高安全水位
                         self
                         .safety_upper_level_m[
                             reservoir_id
                         ]
                     ),
                 ),
-                release=ReleaseBounds(
-                    min_release_m3s=0.0,
-                    max_release_m3s=(
+                release=ReleaseBounds( #release 泄流约束：最大最小泄流约束
+                    min_release_m3s=0.0, #最少可以不放水
+                    max_release_m3s=( #读取该水库最大允许泄流
                         self
                         .max_total_release_m3s[
                             reservoir_id
@@ -775,10 +782,11 @@ class CascadeReservoirEnv:
 
     def _build_safety_solver(
         self,
-    ) -> None:
+    ) -> None: #从环境配置 env_args["safety"] 中读取安全相关参数，然后创建一个 S3RelaxationSolver 安全求解器，
+        #并保存为 self.s3_solver，供后面 prepare_step() 做安全动作筛选和安全恢复。
         safety = self.env_args[
             "safety"
-        ]
+        ] #意思是从总配置 self.env_args 中，把 "safety" 这一整块安全配置取出来
 
         self.s3_solver = (
             S3RelaxationSolver(
@@ -786,26 +794,27 @@ class CascadeReservoirEnv:
                 fallback_config=dict(safety["fallback"]),
                 reservoir_order=(
                     self.reservoir_order
-                ),
+                ), #把五库的固定顺序传进去
                 p3_config=dict(
                     safety[
                         "p3"
                     ]
-                ),
+                ), #把 P3 相关安全配置传给求解器
                 p4_config=dict(
                     safety[
                         "p4"
                     ]
-                ),
+                ), #把 P4 相关安全配置传进去
                 relaxation_config=dict(
                     safety[
                         "relaxation"
                     ]
-                ),
+                ), #把约束放松（relaxation）的配置传进去
             )
         )
 
-    def _build_long_term_constraints(
+    def _build_long_term_constraints( #根据环境配置 self.env_args 创建一个“长期约束成本评估器” ConstraintCostEvaluator，
+            #并保存到 self.constraint_cost_evaluator，后面每个时间步用它来计算长期约束是否被违反、违反程度以及对应的 cost
         self,
     ) -> None:
         self.constraint_cost_evaluator = (
@@ -817,7 +826,7 @@ class CascadeReservoirEnv:
 
     def _build_spaces(
         self,
-    ) -> None:
+    ) -> None: #告诉强化学习框架：这个环境的 observation（状态空间）是什么样的，share observation（全局状态）是什么样的，以及每个水库可以选择多少个动作
         self.observation_space = [
             gym.spaces.Box(
                 low=-np.inf,
@@ -827,7 +836,7 @@ class CascadeReservoirEnv:
                 ),
                 dtype=np.float32,
             )
-        ]
+        ] #创建基础观测空间
 
         for _ in (
             _DOWNSTREAM_ORDER
@@ -841,9 +850,9 @@ class CascadeReservoirEnv:
                     ),
                     dtype=np.float32,
                 )
-            )
+            ) #给下游四座空间添加观测
 
-        share_space = (
+        share_space = ( #创建全局状态空间
             gym.spaces.Box(
                 low=-np.inf,
                 high=np.inf,
@@ -854,7 +863,7 @@ class CascadeReservoirEnv:
             )
         )
 
-        self.share_observation_space = [
+        self.share_observation_space = [ #给每个Agent分配共享状态
             share_space
             for _ in range(
                 self.n_agents
@@ -869,9 +878,9 @@ class CascadeReservoirEnv:
             )
             for reservoir_id
             in self.reservoir_order
-        ]
+        ] #定一个每个水库的动作空间
 
-    def reset(
+    def reset( #确保每个 episode 开始时，环境都回到同一个规定的初始状态。
         self,
     ):
         self._date_index = 0
@@ -951,7 +960,8 @@ class CascadeReservoirEnv:
     def prepare_step(
         self,
     ):
-        """Prepare a read-only S1-S3 context before S4 sampling."""
+        """Prepare a read-only S1-S3 context before S4 sampling.""" #在智能体真正开始选动作之前，先根据“当前日期 + 当前库容 + 当前来水 + P1/P2约束”，
+        #计算出这一时间步的安全决策环境，并交给后面的 S4 顺序采样使用。
 
         if self._terminated:
             raise RuntimeError(

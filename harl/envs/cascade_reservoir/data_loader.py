@@ -41,13 +41,14 @@ _LEVEL_LIMIT_COLUMNS = (
 )
 
 
-class CascadeDataLoader:
+class CascadeDataLoader: #定义一个类：梯级水库数据加载器。把环境配置、静态物理参数、水位—库容关系、
+    #水位限制、初始状态、逐日来水统一加载，并在真正创建水库物理对象之前完成层层校验。
     """Load and validate all data for the five-reservoir cascade."""
 
     def __init__(
         self,
         env_args: Mapping,
-    ):
+    ): #构造函数入口
         if not isinstance(
             env_args,
             Mapping,
@@ -58,7 +59,7 @@ class CascadeDataLoader:
 
         self.env_args = dict(
             env_args
-        )
+        ) #把传进来的 env_args 转换成一个普通 Python 字典，并保存到当前对象的 self.env_args 里。
 
         self.reservoir_order = tuple(
             self.env_args[
@@ -73,34 +74,39 @@ class CascadeDataLoader:
             raise ValueError(
                 "reservoir_order must be "
                 "WDD, BHT, XLD, XJB, THR"
-            )
+            ) #检查输入进来的是否是这五个，若不是就报错
 
-        self._load_scalar_config()
-        self._resolve_paths()
+        self._load_scalar_config() #self 表示当前这个 CascadeDataLoader 对象本身
+        #_load_scalar_config 这是类里面定义的另一个函数
+        #这行代码也就是说让当前 CascadeDataLoader 对象执行 _load_scalar_config()，读取并检查基础标量配置。
+        self._resolve_paths() #调用当前 CascadeDataLoader 对象中的 _resolve_paths()
+        # 现在让这个数据加载器把后面要用到的文件路径确定好
 
         self.reservoir_physics_table = (
             self._load_reservoir_physics_table()
-        )
+        ) #调用类里面的方法 _load_reservoir_physics_table 这个函数负责读取 reservoir_physics.csv
+        #也就是说前面的 self._resolve_paths 已经确定路径在哪里了 现在 _load_reservoir_physics_table 去那个位置读取文件
+        #self.eservoir_physics_table 现在表示五座水库的静态物理参数表，读取之后得到一个 Table
 
         self.level_storage_anchors = (
             self._load_level_storage_anchors()
-        )
+        ) #加载水位-库容关系锚点
 
         self.level_limits = (
             self._load_level_limits()
-        )
+        ) #加载水位限制
 
         self.initial_storage_m3 = (
             self._load_initial_state()
-        )
+        ) #加载初始库容状态 作用：告诉环境初始化的时候五座水库有多少水
 
         self.daily_inflow = (
             self._load_daily_inflow()
-        )
+        ) #加载每日天然来水
 
         self.physics = (
             self._build_physics()
-        )
+        ) #构建五库物理对象
 
         self._cross_validate()
 
@@ -112,41 +118,48 @@ class CascadeDataLoader:
             self.daily_inflow
         )
 
+    #这块儿程序主要负责从env_args配置中读取仿真时间范围、时间步长、水电效率这几个“基础标量参数”，
+    #把他们转换成程序后续真正要使用的数据类型，然后做严格合法性检查
+    #不是说 x = self._load_scalar_config() 然后靠x拿数据
+    #而是：self.start_date=...
+    #self.end_date=...等等，采用的是这种方式，所以这个函数执行之后，当前CascadeDataLoader对象就多了这些属性：
+    # self.start_date、self.end_date
     def _load_scalar_config(
         self,
-    ) -> None:
+    ) -> None: #表示这个函数不打算返回一个结果
         simulation = self.env_args[
             "simulation"
         ]
 
         hydropower = self.env_args[
             "hydropower"
-        ]
+        ] #拿到两个配置模块
 
         self.start_date = pd.Timestamp(
             simulation[
                 "start_date"
-            ]
-        ).normalize()
+            ] #读取仿真开始日期
+        ).normalize() #消除小时、分钟、秒带来的干扰
 
         self.end_date = pd.Timestamp(
             simulation[
                 "end_date"
             ]
-        ).normalize()
+        ).normalize() #读取结束日期
 
         if (
             pd.isna(
                 self.start_date
-            )
+            ) #检查这个值是不是“缺失值/无效值”
             or pd.isna(
                 self.end_date
-            )
-        ):
+            ) #这里的 or 表示只要只要两个日期里面任何一个有问题，条件就成立
+        ): #然后下面的 raise ValueError 立即抛出异常，停止初始化
             raise ValueError(
                 "simulation dates are invalid"
-            )
+            ) #第一个日期检查：日期是不是缺失值
 
+        #第二个日期检查：结束日期不能早于开始日期
         if (
             self.end_date
             < self.start_date
@@ -162,6 +175,7 @@ class CascadeDataLoader:
             ]
         )
 
+        #检查timestep_seconds是否有效
         if (
             not math.isfinite(
                 self.timestep_seconds
@@ -173,12 +187,14 @@ class CascadeDataLoader:
                 "must be positive and finite"
             )
 
+        #读取水电效率 efficiency
         self.efficiency = float(
             hydropower[
                 "efficiency"
             ]
         )
 
+        #efficiency需要大于0小于等于1
         if (
             not math.isfinite(
                 self.efficiency
@@ -204,11 +220,11 @@ class CascadeDataLoader:
         if not isinstance(
             data_config,
             Mapping,
-        ):
+        ): #检查 data_config 是不是一个 Mapping，也就是说检查date_config是不是“键”到“值”的这种结构
             raise TypeError(
                 "env_args['data'] must "
                 "be a mapping"
-            )
+            ) #Mapping 表示：只要这个对象表现得像一个只读的“键值映射结构”即可
 
         project_root = (
             Path(
@@ -218,7 +234,7 @@ class CascadeDataLoader:
             .parents[
                 3
             ]
-        )
+        ) #找到项目根目录 详解：__file__ 表示当前这个 Python 文件本身的位置； .parents[3]表示向上的四级目录（因为是从0开始的）
 
         root_config = Path(
             str(
@@ -226,8 +242,9 @@ class CascadeDataLoader:
                     "root"
                 ]
             )
-        ).expanduser()
+        ).expanduser() #str()将其变成字符串
 
+        #判断root是绝对路径还是相对路径：
         if root_config.is_absolute():
             data_root = (
                 root_config.resolve()
@@ -236,23 +253,23 @@ class CascadeDataLoader:
             data_root = (
                 project_root
                 / root_config
-            ).resolve()
+            ).resolve() #绝对路径也就是完整的路径，相对路径也就是只有 root_config 所以需要拼接一下
 
-        if not data_root.exists():
+        if not data_root.exists():  #exist 问是否存在？
             raise FileNotFoundError(
                 "cascade reservoir data root "
                 f"does not exist: {data_root}"
-            )
+            ) #这里 f" " 的意思是，将“ ”中的字符串，用其所代表的 数值/表达式 来表示
 
-        if not data_root.is_dir():
+        if not data_root.is_dir(): #is_dir 问是不是目录
             raise NotADirectoryError(
                 "cascade reservoir data root "
                 f"is not a directory: {data_root}"
-            )
+            ) # 存在还不够，还必须是一个文件夹
 
         self.data_root = (
             data_root
-        )
+        ) #把最终的数据根目录保存下来
 
         required_files = (
             "reservoir_physics",
@@ -264,7 +281,8 @@ class CascadeDataLoader:
 
         self.paths = {}
 
-        for key in required_files:
+        #下面开始一个个处理5个文件夹
+        for key in required_files: #先检查这个配置里有没有这个key
             if key not in data_config:
                 raise KeyError(
                     "data config missing "
@@ -277,7 +295,7 @@ class CascadeDataLoader:
                         key
                     ]
                 )
-            ).expanduser()
+            ).expanduser() #读取这个文件对应的路径配置 .expanduser()表示展开用户目录
 
             if configured_path.is_absolute():
                 path = (
@@ -303,8 +321,9 @@ class CascadeDataLoader:
 
             self.paths[
                 key
-            ] = path
+            ] = path #把验证好的文件路径保存进去
 
+    #把水库物理参数 CSV 文件读进来；定义这个 CSV 必须包含哪些列。
     def _load_reservoir_physics_table(
         self,
     ) -> pd.DataFrame:
@@ -313,7 +332,7 @@ class CascadeDataLoader:
                 "reservoir_physics"
             ],
             "reservoir_physics",
-        )
+        ) #self.paths["reservoir_physics"]就是把 reservoir_physics 真正对应的文件路径读取出来
 
         required = (
             "reservoir_id",
@@ -322,15 +341,15 @@ class CascadeDataLoader:
             "max_turbine_flow_m3s",
             "max_total_release_m3s",
             "typical_net_head_m",
-        )
+        ) #这里required是一个元组，列出了 reservoir_physics.csv 必须拥有的列名
 
         self._require_columns(
             frame,
             required,
             "reservoir_physics.csv",
-        )
+        ) #在真正做物理计算之前，先保证 CSV 的结构完整
 
-        frame = frame.copy()
+        frame = frame.copy() #给当前的 DataFrame frame 创建一个独立副本，然后后续在这个副本上进行修改
 
         frame[
             "reservoir_id"
@@ -346,7 +365,7 @@ class CascadeDataLoader:
                 "reservoir_id"
             ],
             "reservoir_physics.csv",
-        )
+        ) #检查这一列里的水库编号是不是严格等于程序要求的五个水库。
 
         order_values = pd.to_numeric(
             frame[
@@ -355,7 +374,8 @@ class CascadeDataLoader:
             errors="raise",
         ).to_numpy(
             dtype=np.float64
-        )
+        ) #先把 order 这一列严格转换成数值，再统一变成 float64 的 NumPy 数组，
+        #为后面检查“是不是有限数、是不是精确整数、是不是正好 1~5”做准备。
 
         if not np.all(
             np.isfinite(

@@ -186,7 +186,7 @@ class MaskAccuracyRunner(CascadeReservoirRunner):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--load_config', default='harl/configs/experiments/cascade_budget_00001.json')
+    parser.add_argument('--load_config', default='harl/configs/experiments/cascade_budget_calibrated.json')
     parser.add_argument('--updates', type=int, default=200)
     parser.add_argument('--seed', type=int, default=1)
     parser.add_argument('--print_every', type=int, default=100)
