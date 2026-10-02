@@ -520,7 +520,7 @@ def _validate_local_result(
 
     # S201 and S202 must refer to exactly the same downstream
     # discrete action grid.  Shape equality alone is insufficient:
-    # two reservoirs can both have 201 actions but different
+    # two reservoirs can have the same configured action count but different
     # Q_map_min / Q_map_max values.
     if not np.array_equal(
         local_releases,

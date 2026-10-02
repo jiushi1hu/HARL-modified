@@ -90,7 +90,7 @@ def main() -> None:
             assert share_obs.shape == (1, 5, 85)
             assert rewards.shape == (1, 5, 1)
             assert dones.shape == (1, 5)
-            assert available_actions.shape == (1, 5, 201)
+            assert available_actions.shape == (1, 5, 401)
             assert not dones.any()
             assert env.current_date > before_date
             print("[PASS] env.step: returned HARL interface shapes", flush=True)

@@ -77,7 +77,7 @@
   },
   "env_args": {
     "action": {
-      "num_actions": 201
+      "num_actions": 401
     },
     "data": {
       "daily_inflow": "timeseries/daily_inflow.csv",

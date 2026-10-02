@@ -36,7 +36,7 @@ hydropower: #定义水电计算相关参数
 
 
 action: #定义Actor的动作
-  num_actions: 201 #动作个数
+  num_actions: 401 #动作个数，遵循 docs/Methods.md
 
 
 operation_stage: #按照一年中的月份，把水库运行划分为四个阶段
