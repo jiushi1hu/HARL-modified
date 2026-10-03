@@ -116,6 +116,7 @@ long_term_constraints: #Layer 2
     normalizer: 1.0 #这是违反cost的归一化参数，1意味着没有通过这个参数进行额外数量级缩放
     tolerance: 0.0 #意味着没有额外的“允许少一点也算满足”的宽容区间
     budget: 0.0 #WDD 全部轨迹零违反（U=0、L=0），没有正预算依据；gap=0，lambda 保持 0
+    active_stages: [dry_supply, flood_control, storage, high_level]
 
   - reservoir_id: BHT
     type: "eco_release"
@@ -124,6 +125,7 @@ long_term_constraints: #Layer 2
     normalizer: 1.0
     tolerance: 0.0
     budget: 0.0001 #U=0.000374、L=0；低于当前水平，且多数轮次已经满足
+    active_stages: [dry_supply, flood_control, storage, high_level]
 
   - reservoir_id: XLD
     type: "eco_release"
@@ -132,6 +134,7 @@ long_term_constraints: #Layer 2
     normalizer: 1.0
     tolerance: 0.0
     budget: 0.0025 #U=0.003957、L=0.001839；区间偏低处，目标为已展示过的水平
+    active_stages: [dry_supply, flood_control, storage, high_level]
 
   - reservoir_id: XJB
     type: "eco_release"
@@ -140,6 +143,7 @@ long_term_constraints: #Layer 2
     normalizer: 1.0
     tolerance: 0.0
     budget: 0.0045 #U=0.005691、L=0.003181；区间中部
+    active_stages: [dry_supply, flood_control, storage, high_level]
 
   - reservoir_id: THR
     type: "eco_release"
@@ -148,6 +152,7 @@ long_term_constraints: #Layer 2
     normalizer: 1.0
     tolerance: 0.0
     budget: 0.002 #U=0.005028、L=0.000466；审计显示多数违规日存在可满足动作
+    active_stages: [dry_supply, flood_control, storage, high_level]
 
 
 lagrangian:

@@ -334,6 +334,9 @@ class ReservoirPhysics:
                 "maximum turbine flow"
             )
 
+        # The current five-reservoir instance supplies representative net
+        # heads (typical_net_head_m), not a time-varying tailwater/head model.
+        # Methods.md therefore uses the representative-head instantiation here.
         hydraulic_power_mw = (
             self.efficiency
             * _WATER_DENSITY_KG_M3
